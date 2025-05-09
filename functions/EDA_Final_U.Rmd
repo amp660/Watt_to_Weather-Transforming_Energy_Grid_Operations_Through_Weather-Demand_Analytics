@@ -472,3 +472,214 @@ ggsave("output/figures/optimal_temp_quantiles.png", quant_plot,
        width = 8, height = 6, dpi = 300)
 ```
 
+Regional Sensitivity Analysis
+
+```{r}
+# 6. REGIONAL SENSITIVITY ANALYSIS
+#------------------------------------------------------
+# 6.1 Calculate temperature elasticity of demand by region
+elasticity_data <- demand_data %>%
+  filter(temp_mean > optimal_temp) %>%  # Focus on cooling region of U-curve
+  group_by(energy_region) %>%
+  summarise(
+    elasticity = cov(log(energy_value), log(temp_mean)) / var(log(temp_mean)),
+    r_squared = cor(log(energy_value), log(temp_mean))^2,
+    p_value = cor.test(log(energy_value), log(temp_mean))$p.value,
+    n_obs = n(),
+    mean_temp = mean(temp_mean),
+    mean_demand = mean(energy_value),
+    .groups = 'drop'
+  ) %>%
+  arrange(desc(elasticity))
+
+kable(elasticity_data, caption = "Temperature Elasticity by Region", digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) %>%
+  row_spec(which(elasticity_data$elasticity == max(elasticity_data$elasticity)), 
+          background = "#f5f5f5", bold = TRUE)
+
+# 6.2 Regional sensitivity visualization
+regional_sensitivity <- demand_data %>%
+  group_by(energy_region) %>%
+  summarise(
+    weather_sensitivity = cor(temp_mean, energy_value, use = "complete.obs"),
+    avg_demand = mean(energy_value/1000),
+    demand_volatility = sd(energy_value/1000),
+    temp_range = max(temp_mean) - min(temp_mean),
+    n_obs = n(),
+    .groups = 'drop'
+  ) %>%
+  filter(!is.na(weather_sensitivity)) %>%
+  mutate(
+    # Calculate standard error for correlation
+    se_correlation = sqrt((1 - weather_sensitivity^2) / (n_obs - 2)),
+    # Calculate 95% confidence intervals
+    ci_lower = weather_sensitivity - 1.96 * se_correlation,
+    ci_upper = weather_sensitivity + 1.96 * se_correlation
+  )
+
+sensitivity_plot <- ggplot(regional_sensitivity, 
+                          aes(x = reorder(energy_region, weather_sensitivity), 
+                              y = weather_sensitivity)) +
+  geom_bar(stat = "identity", fill = "steelblue", alpha = 0.8) +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+  geom_text(aes(label = sprintf("%.3f", weather_sensitivity)), 
+            vjust = -0.5, size = 3.5) +
+  coord_flip() +
+  labs(
+    title = "Weather Sensitivity by Energy Region",
+    subtitle = "Correlation between temperature and energy demand with 95% CI",
+    x = "Energy Region",
+    y = "Weather Sensitivity (Correlation Coefficient)",
+    caption = "Higher values indicate stronger weather-demand relationship"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    plot.subtitle = element_text(size = 12),
+    axis.title.y = element_text(margin = ggplot2::margin(r = 10))
+  )
+
+# 6.3 Mixed-effects model to analyze regional variations
+# Subset to avoid memory issues with very large datasets
+if(nrow(demand_data) > 10000) {
+  cat("Subsetting data for mixed-effects model (large dataset)...\n")
+  set.seed(123)
+  mixed_model_data <- demand_data %>%
+    group_by(energy_region) %>%
+    sample_n(min(n(), 2000)) %>%
+    ungroup()
+} else {
+  mixed_model_data <- demand_data
+}
+
+mixed_model <- lme(energy_value ~ temp_mean + temp_squared,
+                  random = ~1 + temp_mean|energy_region,
+                  data = mixed_model_data)
+mixed_summary <- summary(mixed_model)
+
+# Format mixed model results
+mixed_fixed <- data.frame(
+  Parameter = rownames(mixed_summary$tTable),
+  Estimate = mixed_summary$tTable[,"Value"],
+  Std_Error = mixed_summary$tTable[,"Std.Error"],
+  t_value = mixed_summary$tTable[,"t-value"],
+  p_value = mixed_summary$tTable[,"p-value"]
+)
+
+kable(mixed_fixed, caption = "Mixed-Effects Model: Fixed Effects", digits = 4) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+
+# 6.4 Extract random effects to quantify regional variability
+random_effects <- as.data.frame(ranef(mixed_model))
+random_effects$energy_region <- rownames(random_effects)
+
+# Format for better display
+random_effects_formatted <- random_effects %>%
+  rename(
+    Intercept_Adjustment = `(Intercept)`,
+    Temp_Slope_Adjustment = temp_mean
+  ) %>%
+  select(energy_region, Intercept_Adjustment, Temp_Slope_Adjustment) %>%
+  mutate(
+    Total_Intercept = fixef(mixed_model)[1] + Intercept_Adjustment,
+    Total_Temp_Slope = fixef(mixed_model)[2] + Temp_Slope_Adjustment
+  ) %>%
+  arrange(desc(Temp_Slope_Adjustment))
+
+kable(head(random_effects_formatted, 6), caption = "Random Effects by Region (Top 6)", digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+
+# 6.5 Region-specific models to compare slopes
+# Select main regions for comparison
+main_regions <- c("ERCO", "CISO", "NYIS", "PJM")
+
+region_models <- demand_data %>%
+  filter(energy_region %in% main_regions) %>%
+  group_by(energy_region) %>%
+  do(model = lm(energy_value ~ temp_mean + temp_squared, data = .))
+
+# Extract coefficients for each region
+region_coefficients <- region_models %>%
+  mutate(
+    temp_coef = coef(model)[2],
+    temp_sq_coef = coef(model)[3],
+    optimal_temp = -coef(model)[2] / (2 * coef(model)[3]),
+    r_squared = summary(model)$r.squared
+  )
+
+# Remove the model column properly
+region_coefficients$model <- NULL
+
+kable(region_coefficients, caption = "Region-Specific Regression Coefficients", digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+
+# Visualize region-specific U-curves
+region_curves <- demand_data %>%
+  filter(energy_region %in% main_regions) %>%
+  ggplot(aes(x = temp_mean, y = energy_value/1000, color = energy_region)) +
+  geom_smooth(method = "lm", formula = y ~ x + I(x^2), se = FALSE, size = 1.2) +
+  geom_vline(data = region_coefficients, 
+             aes(xintercept = optimal_temp, color = energy_region),
+             linetype = "dashed") +
+  labs(
+    title = "Region-Specific U-Shaped Relationships",
+    subtitle = "Temperature vs Energy Demand with Optimal Points",
+    x = "Average Temperature (°F)",
+    y = "Energy Demand (GWh)",
+    color = "Energy Region"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+print(region_curves)
+ggsave("output/figures/region_specific_curves.png", region_curves, 
+       width = 10, height = 7, dpi = 300)
+
+# 6.6 ANOVA with interaction effects to test regional differences
+interaction_model <- lm(energy_value ~ temp_mean + temp_squared + energy_region + 
+                       temp_mean:energy_region + temp_squared:energy_region,
+                       data = demand_data %>% 
+                         filter(energy_region %in% main_regions))
+interaction_anova <- anova(interaction_model)
+
+kable(interaction_anova, caption = "ANOVA Results for Regional Interaction Effects", digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+
+# 6.7 Regional demand patterns visualization
+regional_summary <- demand_data %>%
+  group_by(energy_region, season) %>%
+  summarise(
+    avg_demand = mean(energy_value/1000, na.rm = TRUE),
+    avg_temp = mean(temp_mean, na.rm = TRUE),
+    weather_sensitivity = cor(temp_mean, energy_value, use = "complete.obs"),
+    n_obs = n(),
+    .groups = 'drop'
+  ) %>%
+  filter(!is.na(weather_sensitivity) & n_obs >= 30)  # Ensure sufficient observations
+
+regional_plot <- ggplot(regional_summary, 
+                       aes(x = avg_temp, y = avg_demand, 
+                           color = energy_region, size = abs(weather_sensitivity))) +
+  geom_point(alpha = 0.7) +
+  facet_wrap(~ season) +
+  scale_size_continuous(range = c(3, 10), name = "Weather\nSensitivity") +
+  scale_color_viridis_d(option = "turbo") +
+  labs(
+    title = "Regional Energy Demand Patterns",
+    subtitle = "Point size indicates weather sensitivity",
+    x = "Average Temperature (°F)",
+    y = "Average Demand (GWh)",
+    color = "Energy Region",
+    caption = "Data grouped by region and season; larger points show stronger temperature-demand correlation"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.position = "right",
+    legend.box = "vertical"
+  )
+
+print(regional_plot)
+ggsave("output/figures/regional_patterns.png", regional_plot, 
+       width = 12, height = 8, dpi = 300)
+```
