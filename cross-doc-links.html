@@ -1,0 +1,11 @@
+<script>
+    // Function to handle cross-document references
+    function jumpToReference(target) {
+      // Extract the target document filename and anchor
+      var targetDocFilename = target.split('#')[0];
+      var targetAnchor = target.split('#')[1];
+      
+      // Open the target document with the anchor
+      window.open(targetDocFilename + '#' + targetAnchor, '_self');
+    }
+    </script>
