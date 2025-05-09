@@ -158,3 +158,50 @@ cat("Created demand dataset with dimensions:", dim(demand_data), "\n")
 cat("Covering", n_distinct(demand_data$energy_region), "energy regions\n")
 cat("Temperature range:", min(demand_data$temp_mean), "to", max(demand_data$temp_mean), "°F\n")
 ```
+
+Descriptive Statistics
+
+```{r}
+# 3. DESCRIPTIVE STATISTICS
+#------------------------------------------------------
+# Calculate summary statistics by region and season
+summary_stats <- demand_data %>%
+  group_by(energy_region, season) %>%
+  summarise(
+    n_obs = n(),
+    mean_demand = mean(energy_value, na.rm = TRUE),
+    median_demand = median(energy_value, na.rm = TRUE),
+    sd_demand = sd(energy_value, na.rm = TRUE),
+    min_demand = min(energy_value, na.rm = TRUE),
+    max_demand = max(energy_value, na.rm = TRUE),
+    mean_temp = mean(temp_mean, na.rm = TRUE),
+    temp_range = max(temp_mean, na.rm = TRUE) - min(temp_mean, na.rm = TRUE),
+    temp_sd = sd(temp_mean, na.rm = TRUE),
+    cv_demand = sd_demand / mean_demand * 100,  # Coefficient of variation
+    .groups = 'drop'
+  ) %>%
+  arrange(energy_region, season)
+
+# Display summary statistics
+kable(head(summary_stats, 8), 
+     caption = "Summary Statistics by Region and Season (First 8 rows)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), font_size = 12)
+
+# Create a heatmap of average demand by region and season
+demand_heatmap <- ggplot(summary_stats, 
+                        aes(x = season, y = reorder(energy_region, mean_demand), 
+                            fill = mean_demand)) +
+  geom_tile() +
+  scale_fill_viridis(option = "plasma", name = "Mean Demand") +
+  labs(
+    title = "Average Energy Demand by Region and Season",
+    subtitle = "Higher values indicate greater energy consumption",
+    x = "Season",
+    y = "Energy Region"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+print(demand_heatmap)
+```
+
