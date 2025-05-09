@@ -1,0 +1,49 @@
+# R Package Requirements for Weather-Energy Data Warehouse Project
+# Generated: May 2025
+
+# Core Packages
+tidyverse==2.0.0
+httr==0.14.0
+jsonlite==1.8.4
+lubridate==1.8.0
+readxl==1.4.2
+knitr==1.42.0
+rmarkdown==2.20.0
+kableExtra==1.3.4
+janitor==2.2.0
+skimr==2.1.5
+
+# Visualization Packages
+ggplot2==3.4.1
+plotly==4.10.1
+leaflet==2.1.2
+dygraphs==1.1.1.6
+networkD3==0.4
+highcharter==0.9.4
+corrplot==0.92
+patchwork==1.1.2
+viridis==0.6.3
+scales==1.2.1
+DT==0.28
+
+# Statistical Analysis Packages
+mgcv==1.8.42
+lmtest==0.9.40
+car==3.1.1
+quantreg==5.94
+segmented==1.6.1
+Hmisc==5.0.1
+nlme==3.1.157
+sandwich==3.0.2
+boot==1.3.28
+performance==0.10.2
+effects==4.2.2
+MASS==7.3.58
+
+# Machine Learning Packages
+randomForest==4.7.1
+gbm==2.1.8
+caret==6.0.93
+
+# Reproducibility
+renv==0.17.3
