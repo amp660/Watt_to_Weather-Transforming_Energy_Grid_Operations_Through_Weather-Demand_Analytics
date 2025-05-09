@@ -205,3 +205,50 @@ demand_heatmap <- ggplot(summary_stats,
 print(demand_heatmap)
 ```
 
+Distribution Analysis
+
+```{r}
+# 4. DISTRIBUTION ANALYSIS
+#------------------------------------------------------
+# Energy value distribution by type
+energy_dist_plot <- ggplot(merged_data %>% filter(type %in% c("D", "NG")), 
+                           aes(x = energy_value/1000, fill = type)) +
+  geom_histogram(bins = 50, alpha = 0.7, position = "dodge") +
+  scale_x_log10(labels = comma) +
+  scale_fill_brewer(palette = "Set1", 
+                    labels = c("D" = "Demand", "NG" = "Net Generation")) +
+  labs(
+    title = "Distribution of Energy Values by Type",
+    subtitle = "Log scale to show full range",
+    x = "Energy Value (GWh)",
+    y = "Count",
+    fill = "Energy Type",
+    caption = "Note: Log scale used due to wide range of values"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.position = "bottom"
+  )
+
+print(energy_dist_plot)
+ggsave("output/figures/energy_distribution.png", energy_dist_plot, 
+       width = 10, height = 6, dpi = 300)
+
+# Create QQ plots to check for normality
+qq_plot <- demand_data %>%
+  ggplot(aes(sample = energy_value)) +
+  stat_qq() +
+  stat_qq_line() +
+  facet_wrap(~ energy_region, scales = "free") +
+  labs(
+    title = "QQ Plots of Energy Demand by Region",
+    subtitle = "Checking for normality of distribution",
+    x = "Theoretical Quantiles",
+    y = "Sample Quantiles"
+  ) +
+  theme_minimal()
+
+print(qq_plot)
+```
+
