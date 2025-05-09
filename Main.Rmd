@@ -1,0 +1,504 @@
+# Main.R - Weather-Energy Data Warehouse Project
+# Author: [Your Name]
+# Date: May 2025
+#
+# This script manages the entire workflow for the Weather-Energy Data Warehouse Project.
+# It handles data upload, preprocessing, analysis, and visualization.
+# The workflow is defined in _targets.R file and executed through this script.
+
+```{r}
+# Load necessary libraries for main script execution
+suppressPackageStartupMessages({
+  library(targets)      # For workflow management
+  library(tarchetypes)  # Extended targets functionality
+  library(tidyverse)    # Data manipulation and visualization
+  library(lubridate)    # Date/time handling
+  library(httr)         # HTTP requests
+  library(jsonlite)     # JSON parsing
+  library(here)         # Path management
+  library(rlang)        # Better error handling
+  library(logger)       # Logging facility
+  library(optparse)     # Command line option parsing
+})
+
+# Define command line options
+option_list <- list(
+  make_option(c("-c", "--clean"), action="store_true", default=FALSE,
+              help="Clean all targets before running workflow"),
+  make_option(c("-s", "--steps"), type="character", default="all",
+              help="Specify which steps to run (all, weather, energy, merge, analysis, visualize)"),
+  make_option(c("-d", "--debug"), action="store_true", default=FALSE,
+              help="Run in debug mode with verbose output"),
+  make_option(c("--start-date"), type="character", default="2024-01-01",
+              help="Start date for data retrieval (YYYY-MM-DD)"),
+  make_option(c("--end-date"), type="character", default="2024-12-31",
+              help="End date for data retrieval (YYYY-MM-DD)"),
+  make_option(c("--api-key"), type="character", default=NULL,
+              help="EIA API key for energy data retrieval")
+)
+
+# Parse command line arguments
+opt_parser <- OptionParser(option_list=option_list)
+opts <- parse_args(opt_parser)
+
+# Setup logging
+log_dir <- "logs"
+if (!dir.exists(log_dir)) {
+  dir.create(log_dir, recursive = TRUE)
+}
+
+log_file <- file.path(log_dir, paste0("weather_energy_project_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".log"))
+log_threshold <- ifelse(opts$debug, "DEBUG", "INFO")
+
+# Initialize logger
+logger::log_threshold(log_threshold)
+logger::log_appender(logger::appender_file(log_file))
+logger::log_layout(logger::layout_glue_generator(
+  format = "{level} [{format(time, '%Y-%m-%d %H:%M:%S')}] {msg}"
+))
+
+# Log script start and options
+log_info("Starting Weather-Energy Data Warehouse Project")
+log_info("Options: {paste(names(opts), opts, sep='=', collapse=', ')}")
+
+# Create a safe execution wrapper for error handling
+safe_execute <- function(expr, message) {
+  tryCatch(
+    {
+      log_info(message)
+      force(expr)
+      log_info("{message} completed successfully")
+      TRUE
+    },
+    error = function(e) {
+      log_error("{message} failed: {e$message}")
+      if (opts$debug) {
+        log_debug("Error details: {e}")
+      }
+      FALSE
+    },
+    warning = function(w) {
+      log_warn("{message} warning: {w$message}")
+      TRUE
+    }
+  )
+}
+
+# Set environment variables if provided
+if (!is.null(opts$api_key)) {
+  Sys.setenv(EIA_API_KEY = opts$api_key)
+  log_info("EIA API key set from command line")
+} else {
+  log_info("No EIA API key provided, will attempt to use key from environment or config file")
+}
+
+# Check for required R packages
+check_required_packages <- function() {
+  log_info("Checking required packages")
+  
+  required_packages <- c(
+    "targets", "tarchetypes", "tidyverse", "lubridate", "httr", "jsonlite",
+    "here", "rlang", "logger", "mgcv", "lmtest", "car", "quantreg", "segmented",
+    "nlme", "sandwich", "boot", "randomForest", "gbm", "caret"
+  )
+  
+  missing_packages <- required_packages[!required_packages %in% installed.packages()[,"Package"]]
+  
+  if (length(missing_packages) > 0) {
+    log_warn("Missing packages: {paste(missing_packages, collapse=', ')}")
+    
+    # Ask to install if interactive
+    if (interactive()) {
+      install <- readline(prompt = paste0("Install missing packages? (y/n): "))
+      if (tolower(install) == "y") {
+        install.packages(missing_packages)
+        log_info("Installed missing packages")
+      } else {
+        log_error("Cannot proceed without required packages")
+        stop("Missing required packages")
+      }
+    } else {
+      log_error("Cannot proceed without required packages in non-interactive mode")
+      stop("Missing required packages")
+    }
+  } else {
+    log_info("All required packages are installed")
+  }
+}
+
+# Setup project directories
+setup_directories <- function() {
+  log_info("Setting up project directories")
+  
+  dirs <- c(
+    "data/raw", 
+    "data/processed", 
+    "data/backup",
+    "output/figures",
+    "R",
+    "reports"
+  )
+  
+  for (dir in dirs) {
+    if (!dir.exists(dir)) {
+      dir.create(dir, recursive = TRUE)
+      log_info("Created directory: {dir}")
+    }
+  }
+}
+
+# Create/ensure R function files exist
+setup_r_scripts <- function() {
+  log_info("Setting up R function files")
+  
+  r_files <- c(
+    "R/weather_functions.R",
+    "R/energy_functions.R",
+    "R/analysis_functions.R",
+    "R/visualization_functions.R"
+  )
+  
+  for (file in r_files) {
+    if (!file.exists(file)) {
+      # Create template file with function stubs
+      if (basename(file) == "weather_functions.R") {
+        writeLines(
+          c(
+            "# Weather data functions",
+            "",
+            "# Create project directories",
+            "create_project_directories <- function(config) {",
+            "  dirs <- c(",
+            "    file.path(config$data_dir, 'raw'),", 
+            "    file.path(config$data_dir, 'processed'),",
+            "    file.path(config$data_dir, 'backup'),",
+            "    config$figures_dir",
+            "  )",
+            "  ",
+            "  for (dir in dirs) {",
+            "    if (!dir.exists(dir)) {",
+            "      dir.create(dir, recursive = TRUE)",
+            "    }",
+            "  }",
+            "  ",
+            "  return(dirs)",
+            "}",
+            "",
+            "# Read US locations data",
+            "read_us_locations <- function(file_path) {",
+            "  # Read location metadata or create if doesn't exist",
+            "  if (file.exists(file_path)) {",
+            "    locations <- read_csv(file_path)",
+            "  } else {",
+            "    # Define default US locations",
+            "    locations <- tibble(",
+            "      location = c('New York, NY', 'Los Angeles, CA', 'Chicago, IL', 'Houston, TX', ",
+            "                 'Phoenix, AZ', 'Philadelphia, PA', 'San Antonio, TX', 'San Diego, CA',",
+            "                 'Dallas, TX', 'San Jose, CA', 'Austin, TX', 'Jacksonville, FL',",
+            "                 'Fort Worth, TX', 'Columbus, OH', 'San Francisco, CA', 'Charlotte, NC',",
+            "                 'Indianapolis, IN', 'Seattle, WA', 'Denver, CO', 'Boston, MA'),",
+            "      latitude = c(40.7128, 34.0522, 41.8781, 29.7604, 33.4484, 39.9526, 29.4241, 32.7157,",
+            "                32.7767, 37.3382, 30.2672, 30.3322, 32.7555, 39.9612, 37.7749, 35.2271,",
+            "                39.7684, 47.6062, 39.7392, 42.3601),",
+            "      longitude = c(-74.0060, -118.2437, -87.6298, -95.3698, -112.0740, -75.1652, -98.4936, -117.1611,",
+            "                   -96.7970, -121.8863, -97.7431, -81.6557, -97.3308, -82.9988, -122.4194, -80.8431,",
+            "                   -86.1581, -122.3321, -104.9903, -71.0589)",
+            "    )",
+            "    # Save for future use",
+            "    write_csv(locations, file_path)",
+            "  }",
+            "  return(locations)",
+            "}",
+            "",
+            "# Fetch weather data for all locations",
+            "fetch_weather_data <- function(locations, start_date, end_date, base_url, max_retries = 3) {",
+            "  # Fetch weather data for all locations and combine",
+            "  # Real implementation would include fetching from API with retries",
+            "  all_data <- map_df(1:nrow(locations), function(i) {",
+            "    fetch_location_weather(",
+            "      locations$latitude[i],",
+            "      locations$longitude[i],",
+            "      locations$location[i],",
+            "      start_date,",
+            "      end_date,",
+            "      base_url,",
+            "      max_retries",
+            "    )",
+            "  })",
+            "  ",
+            "  return(all_data)",
+            "}",
+            "",
+            "# Helper function to fetch weather for a single location",
+            "fetch_location_weather <- function(latitude, longitude, location_name, start_date, end_date, base_url, max_retries) {",
+            "  # Implementation details for API requests with error handling",
+            "  # This would be a detailed implementation of the weather API fetching logic",
+            "}",
+            "",
+            "# Clean weather data",
+            "clean_weather_data <- function(weather_raw) {",
+            "  # Data cleaning implementation",
+            "  # This would transform raw API data into analysis-ready dataset",
+            "}",
+            "",
+            "# Aggregate weather data to daily level",
+            "aggregate_weather_to_daily <- function(weather_clean) {",
+            "  # Aggregate hourly data to daily",
+            "  # This would generate daily weather summaries",
+            "}",
+            "",
+            "# Create weather summary statistics",
+            "create_weather_summary <- function(weather_clean) {",
+            "  # Generate summary statistics",
+            "  # This would create location-based weather summaries",
+            "}"
+          ),
+          file
+        )
+      } else if (basename(file) == "energy_functions.R") {
+        writeLines(
+          c(
+            "# Energy data functions",
+            "",
+            "# Fetch energy data from API",
+            "fetch_energy_data <- function(base_url, start_date, end_date, api_key = Sys.getenv('EIA_API_KEY')) {",
+            "  # Implementation to fetch energy data from EIA API",
+            "  # Would include pagination, error handling, etc.",
+            "}",
+            "",
+            "# Clean energy data",
+            "clean_energy_data <- function(energy_raw) {",
+            "  # Clean and transform raw energy data",
+            "  # Would standardize units, add derived features, etc.",
+            "}",
+            "",
+            "# Create energy summary",
+            "create_energy_summary <- function(energy_clean) {",
+            "  # Generate summary statistics for energy data",
+            "  # Would aggregate by region, type, etc.",
+            "}"
+          ),
+          file
+        )
+      } else if (basename(file) == "analysis_functions.R") {
+        writeLines(
+          c(
+            "# Analysis functions",
+            "",
+            "# Create location to energy region mapping",
+            "create_location_mapping <- function(weather_daily) {",
+            "  # Create mapping between weather locations and energy regions",
+            "}",
+            "",
+            "# Merge weather and energy data",
+            "merge_weather_energy_data <- function(weather_daily, energy_clean, location_mapping) {",
+            "  # Merge datasets based on location mapping",
+            "}",
+            "",
+            "# Prepare demand data for analysis",
+            "prepare_demand_data <- function(merged_data) {",
+            "  # Filter for demand data and add derived variables",
+            "}",
+            "",
+            "# Fit quadratic model for U-shape verification",
+            "fit_quadratic_model <- function(demand_data) {",
+            "  # Fit model to verify U-shaped relationship",
+            "}",
+            "",
+            "# Calculate optimal temperature (inflection point)",
+            "calculate_optimal_temperature <- function(quadratic_model) {",
+            "  # Find temperature where energy demand is minimized",
+            "}",
+            "",
+            "# Calculate temperature elasticity by region",
+            "calculate_temperature_elasticity <- function(demand_data, optimal_temperature) {",
+            "  # Calculate regional elasticity metrics",
+            "}",
+            "",
+            "# Analyze regional sensitivity",
+            "analyze_regional_sensitivity <- function(demand_data) {",
+            "  # Comprehensive regional variation analysis",
+            "}",
+            "",
+            "# Analyze seasonal effects",
+            "analyze_seasonal_effects <- function(demand_data) {",
+            "  # Analyze seasonal patterns and effects",
+            "}",
+            "",
+            "# Fit predictive models",
+            "fit_predictive_models <- function(demand_data) {",
+            "  # Train and evaluate predictive models",
+            "}",
+            "",
+            "# Calculate economic impact of temperature deviations",
+            "calculate_economic_impact <- function(demand_data, optimal_temperature) {",
+            "  # Calculate economic implications of temperature changes",
+            "}",
+            "",
+            "# Prepare data for final report",
+            "prepare_report_data <- function(optimal_temperature, temperature_elasticity, ",
+            "                              regional_sensitivity, seasonal_effects, ",
+            "                              predictive_models, economic_impact) {",
+            "  # Combine analysis results for reporting",
+            "}"
+          ),
+          file
+        )
+      } else if (basename(file) == "visualization_functions.R") {
+        writeLines(
+          c(
+            "# Visualization functions",
+            "",
+            "# Create U-shaped relationship plot",
+            "create_u_shape_plot <- function(demand_data) {",
+            "  # Generate plot showing U-shaped relationship",
+            "  plot_file <- 'output/figures/u_shape_relationship.png'",
+            "  ",
+            "  # Implementation here",
+            "  ",
+            "  return(plot_file)",
+            "}",
+            "",
+            "# Create seasonal patterns plot",
+            "create_seasonal_plot <- function(demand_data) {",
+            "  # Generate seasonal pattern visualization",
+            "  plot_file <- 'output/figures/seasonal_patterns.png'",
+            "  ",
+            "  # Implementation here",
+            "  ",
+            "  return(plot_file)",
+            "}",
+            "",
+            "# Create regional sensitivity plot",
+            "create_regional_plot <- function(regional_sensitivity) {",
+            "  # Generate regional sensitivity visualization",
+            "  plot_file <- 'output/figures/regional_sensitivity.png'",
+            "  ",
+            "  # Implementation here",
+            "  ",
+            "  return(plot_file)",
+            "}",
+            "",
+            "# Create economic impact plot",
+            "create_economic_impact_plot <- function(economic_impact) {",
+            "  # Generate economic impact visualization",
+            "  plot_file <- 'output/figures/economic_impact.png'",
+            "  ",
+            "  # Implementation here",
+            "  ",
+            "  return(plot_file)",
+            "}",
+            "",
+            "# Create interactive 3D visualization",
+            "create_interactive_3d_plot <- function(demand_data) {",
+            "  # Generate interactive 3D plot",
+            "  plot_file <- 'output/figures/interactive_3d.html'",
+            "  ",
+            "  # Implementation here",
+            "  ",
+            "  return(plot_file)",
+            "}",
+            "",
+            "# Create interactive map",
+            "create_interactive_map <- function(regional_sensitivity) {",
+            "  # Generate interactive map visualization",
+            "  plot_file <- 'output/figures/interactive_map.html'",
+            "  ",
+            "  # Implementation here",
+            "  ",
+            "  return(plot_file)",
+            "}"
+          ),
+          file
+        )
+      }
+      
+      log_info("Created template file: {file}")
+    }
+  }
+}
+
+# Process steps based on command line arguments
+process_selected_steps <- function(steps) {
+  log_info("Processing selected steps: {steps}")
+  
+  # Define target patterns for each step
+  step_patterns <- list(
+    weather = c("weather_", "us_locations"),
+    energy = "energy_",
+    merge = c("location_mapping", "merged_data"),
+    analysis = c("demand_data", "quadratic_model", "optimal_", "temperature_elasticity", 
+                "regional_sensitivity", "seasonal_effects", "predictive_models", "economic_impact"),
+    visualize = c("_plot", "interactive_")
+  )
+  
+  if (steps == "all") {
+    # Run all targets
+    log_info("Running all targets")
+    tar_make()
+  } else {
+    # Run specific steps
+    selected_steps <- strsplit(steps, ",")[[1]]
+    
+    patterns <- unlist(step_patterns[selected_steps])
+    if (length(patterns) > 0) {
+      log_info("Running targets matching patterns: {paste(patterns, collapse=', ')}")
+      tar_make(names = starts_with(patterns))
+    } else {
+      log_warn("No valid steps specified, running all targets")
+      tar_make()
+    }
+  }
+}
+
+# Main execution logic
+main <- function() {
+  # Initial setup
+  safe_execute(check_required_packages(), "Package check")
+  safe_execute(setup_directories(), "Directory setup")
+  safe_execute(setup_r_scripts(), "R script setup")
+  
+  # Update _targets.R with custom parameters if provided
+  if (opts$start_date != "2024-01-01" || opts$end_date != "2024-12-31") {
+    log_info("Updating date range in _targets.R")
+    
+    targets_content <- readLines("_targets.R")
+    targets_content <- gsub('start_date = "2024-01-01"', 
+                           sprintf('start_date = "%s"', opts$start_date), 
+                           targets_content)
+    targets_content <- gsub('end_date = "2024-12-31"', 
+                           sprintf('end_date = "%s"', opts$end_date), 
+                           targets_content)
+    writeLines(targets_content, "_targets.R")
+    
+    log_info("Updated date range to {opts$start_date} - {opts$end_date}")
+  }
+  
+  # Clean targets if requested
+  if (opts$clean) {
+    log_info("Cleaning all targets")
+    tar_destroy(ask = FALSE)
+  }
+  
+  # Process selected steps
+  safe_execute(process_selected_steps(opts$steps), "Target processing")
+  
+  # Check for any outdated targets
+  outdated <- tar_outdated()
+  if (length(outdated) > 0) {
+    log_warn("Some targets are outdated: {paste(outdated, collapse=', ')}")
+  }
+  
+  # Final summary
+  log_info("Workflow execution complete")
+  log_info("Project status summary:")
+  
+  # Print summary of targets
+  tar_visnetwork()
+  
+  log_info("See log file for detailed execution information: {log_file}")
+}
+
+# Execute main function
+main()
+```
