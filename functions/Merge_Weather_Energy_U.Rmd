@@ -1,0 +1,472 @@
+r---
+title: "Merge_Energy_Weather"
+output: html_document
+date: "2025-05-04"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+MERGING DATASETS
+
+```{r}
+# SIMPLE DIRECT MERGE - Matching your merged_data structure
+###################################################
+
+# Load required libraries
+library(tidyverse)
+library(lubridate)
+library(digest)  # For creating hash values
+library(jsonlite) # For JSON operations
+
+# GITHUB CONNECTION SETUP
+##################################################
+
+# Define your GitHub repository URL 
+github_repo_url <- "https://github.com/amp660/Data_Wrangling_Data_Backups"  # Replace with your actual GitHub repo URL
+github_connected <- FALSE  # Initialize connection status
+
+# Function to commit and push changes to GitHub
+commit_and_push_changes <- function(commit_message, files_to_add = ".", push = TRUE) {
+  tryCatch({
+    # Stage the specified files
+    cat(sprintf("Adding files to Git staging: %s\n", files_to_add))
+    system(paste0("git add ", files_to_add))
+    
+    # Create a commit with the provided message
+    commit_cmd <- paste0('git commit -m "', commit_message, '"')
+    commit_result <- system(commit_cmd, intern = TRUE)
+    cat("Changes committed to Git repository:\n")
+    cat(paste(commit_result, collapse = "\n"), "\n\n")
+    
+    # Push to GitHub if requested
+    if (push) {
+      cat("Pushing changes to GitHub repository...\n")
+      
+      # First try to pull any remote changes to avoid conflicts
+      cat("Checking for remote changes first...\n")
+      pull_result <- tryCatch({
+        system("git pull --rebase origin main", intern = TRUE)
+      }, error = function(e) {
+        cat("Warning: Could not pull from remote. Will try to force push.\n")
+        return(NULL)
+      })
+      
+      # Now push the changes
+      push_result <- tryCatch({
+        system("git push origin main", intern = TRUE)
+      }, error = function(e) {
+        # If regular push fails, try to resolve with a pull and merge
+        cat("Push failed. Attempting to resolve conflicts...\n")
+        system("git pull origin main --allow-unrelated-histories", intern = TRUE)
+        # Try pushing again after the merge
+        result <- system("git push origin main", intern = TRUE)
+        return(result)
+      })
+      
+      cat("Changes pushed to GitHub successfully!\n")
+      if (!is.null(push_result)) {
+        cat(paste(push_result, collapse = "\n"), "\n\n")
+      }
+    }
+    
+    return(TRUE)
+  }, error = function(e) {
+    cat("WARNING: Failed to commit or push changes to GitHub.\n")
+    cat("Error message:", e$message, "\n")
+    cat("You may need to manually resolve conflicts or force push:\n")
+    cat("git pull --allow-unrelated-histories origin main\n")
+    cat("git push -f origin main  # Use with caution, this will overwrite remote changes\n")
+    return(FALSE)
+  })
+}
+
+# Function to connect to GitHub repository
+connect_to_github <- function(repo_url) {
+  tryCatch({
+    # Check if git is installed
+    git_version <- system("git --version", intern = TRUE)
+    cat("Git detected:", git_version, "\n")
+    
+    # Initialize Git repository if not already done
+    if (!file.exists(".git")) {
+      cat("Initializing local Git repository...\n")
+      system("git init")
+      
+      # Create .gitignore file
+      writeLines(
+        c(
+          "# R specific files",
+          ".Rhistory",
+          ".RData",
+          ".Rproj.user/",
+          "*.Rproj",
+          "",
+          "# Large data files",
+          "data/raw/*.csv",
+          "data/raw/*.rds",
+          "data/processed/*.rds",
+          "data/backup/raw_snapshots/*.rds",
+          "",
+          "# Sensitive information",
+          "credentials.R",
+          "api_keys.txt",
+          "config/*.txt",
+          "",
+          "# Temporary files",
+          "tmp/",
+          "temp/",
+          "*.tmp",
+          "",
+          "# System files",
+          ".DS_Store",
+          "Thumbs.db"
+        ),
+        ".gitignore"
+      )
+      cat("Created .gitignore file for managing tracked files.\n")
+    } else {
+      cat("Git repository already initialized.\n")
+    }
+    
+    # Check if remote is already configured
+    remote_exists <- tryCatch({
+      remote_check <- system("git remote -v", intern = TRUE)
+      grepl("origin", paste(remote_check, collapse = " "))
+    }, error = function(e) {
+      return(FALSE)
+    })
+    
+    if (!remote_exists) {
+      # Configure the remote repository
+      cat("Connecting to remote GitHub repository:", repo_url, "\n")
+      system(paste0("git remote add origin ", repo_url))
+      cat("Remote repository connected successfully.\n")
+      
+      # Configure basic Git settings if not already set
+      user_name <- system("git config user.name", intern = TRUE)
+      user_email <- system("git config user.email", intern = TRUE)
+      
+      if (length(user_name) == 0 || length(user_email) == 0) {
+        cat("\nGit user settings not configured. You should set them with:\n")
+        cat("git config --global user.name \"Your Name\"\n")
+        cat("git config --global user.email \"your.email@example.com\"\n\n")
+      }
+    } else {
+      # Remote already exists, get the URL
+      remote_url <- system("git remote get-url origin", intern = TRUE)
+      cat("GitHub repository already connected to:", remote_url, "\n")
+      
+      if (remote_url != repo_url) {
+        cat("NOTE: Current remote URL differs from specified URL.\n")
+        cat("To update the remote URL, use:\n")
+        cat(paste0("git remote set-url origin ", repo_url, "\n\n"))
+      }
+    }
+    
+    # Try to pull from remote first to integrate any existing remote content
+    tryCatch({
+      cat("Pulling any existing remote content...\n")
+      system("git pull origin main --allow-unrelated-histories", intern = TRUE)
+    }, error = function(e) {
+      cat("Note: Could not pull from remote. This is normal for new repositories.\n")
+    })
+    
+    # Instructions for pushing to GitHub
+    cat("\nTo push your changes to GitHub, use these commands:\n")
+    cat("1. Add files to staging: git add .\n")
+    cat("2. Commit changes: git commit -m \"Your commit message\"\n")
+    cat("3. Push to GitHub: git push -u origin main\n\n")
+    
+    return(TRUE)
+  }, error = function(e) {
+    cat("ERROR: Failed to connect to GitHub repository.\n")
+    cat("Error message:", e$message, "\n")
+    cat("Please ensure Git is installed and you have the necessary permissions.\n")
+    return(FALSE)
+  })
+}
+
+# Function to create metadata summary for GitHub
+create_data_summary <- function(data, name) {
+  # Calculate size in MB (convert to numeric first)
+  size_mb <- as.numeric(object.size(data)) / (1024^2)
+  
+  summary_data <- list(
+    name = name,
+    records = nrow(data),
+    columns = ncol(data),
+    size_mb = round(size_mb, 2),
+    timestamp = as.character(Sys.time()),  # Convert to character for JSON
+    hash = digest::digest(data, algo = "md5")
+  )
+  
+  # Create summary file path
+  summary_filename <- paste0("data/processed/", name, "_summary.json")
+  
+  # Write summary as JSON
+  jsonlite::write_json(summary_data, summary_filename, pretty = TRUE, auto_unbox = TRUE)
+  
+  return(summary_filename)
+}
+
+# Connect to GitHub repository
+github_connected <- connect_to_github(github_repo_url)
+
+# Record the start time for performance tracking
+start_time <- Sys.time()
+cat("Starting data merge process at:", format(start_time), "\n")
+
+# Load the datasets
+weather_clean <- readRDS("../data/processed/weather_clean.rds")
+energy_clean <- readRDS("../data/processed/energy_clean.rds")
+
+# Create summaries for GitHub tracking
+if (github_connected) {
+  # Create summaries of input datasets
+  weather_summary_file <- create_data_summary(weather_clean, "weather_clean_input_simple")
+  energy_summary_file <- create_data_summary(energy_clean, "energy_clean_input_simple")
+  
+  # Commit summaries to GitHub
+  commit_and_push_changes("Added input datasets summaries for simple merge process", 
+                         c(weather_summary_file, energy_summary_file))
+}
+
+# First, let's prepare the weather data with daily aggregates by location
+weather_daily_by_location <- weather_clean %>%
+  group_by(location_name, date, latitude_deg, longitude_deg) %>%
+  summarise(
+    temp_mean = mean(temperature_f, na.rm = TRUE),
+    temp_min = min(temperature_f, na.rm = TRUE),
+    temp_max = max(temperature_f, na.rm = TRUE),
+    temp_range = max(temperature_f, na.rm = TRUE) - min(temperature_f, na.rm = TRUE),
+    humidity_mean = mean(humidity_pct, na.rm = TRUE),
+    precipitation_total = sum(precipitation_mm, na.rm = TRUE),
+    wind_speed_mean = mean(wind_speed_mps, na.rm = TRUE),
+    wind_speed_max = max(wind_speed_mps, na.rm = TRUE),
+    cloud_cover_mean = mean(cloud_cover_pct, na.rm = TRUE),
+    hourly_records = n(),
+    .groups = 'drop'
+  ) %>%
+  rename(
+    location = location_name,
+    latitude = latitude_deg,
+    longitude = longitude_deg
+  )
+
+# Save prepared weather data for GitHub tracking
+if (github_connected) {
+  # Save a sample of prepared weather data
+  sample_size <- min(50, nrow(weather_daily_by_location))
+  write_csv(
+    weather_daily_by_location %>% sample_n(sample_size),
+    "data/processed/weather_daily_sample_simple.csv"
+  )
+  commit_and_push_changes("Added prepared weather data sample for simple merge", 
+                         "data/processed/weather_daily_sample_simple.csv")
+}
+
+# Prepare energy data to match the structure
+energy_prepared <- energy_clean %>%
+  mutate(
+    period = as.character(date)  # Convert date to character first
+  ) %>%
+  select(
+    date,
+    energy_region = company_code,  # Using company_code as region identifier
+    energy_region_full_name = company_name,
+    period,
+    `respondent-name` = company_name,
+    type = measurement_type,
+    `type-name` = measurement_name,
+    timezone = timezone,
+    `timezone-description` = timezone_desc,
+    value = value,
+    `value-units` = units
+  )
+
+# Save prepared energy data for GitHub tracking
+if (github_connected) {
+  # Save a sample of prepared energy data
+  sample_size <- min(50, nrow(energy_prepared))
+  write_csv(
+    energy_prepared %>% sample_n(sample_size),
+    "data/processed/energy_prepared_sample_simple.csv"
+  )
+  commit_and_push_changes("Added prepared energy data sample for simple merge", 
+                         "data/processed/energy_prepared_sample_simple.csv")
+}
+
+# Create a mapping between weather locations and energy regions
+# This mapping is based on typical US energy regions
+location_mapping <- weather_daily_by_location %>%
+  distinct(location) %>%
+  mutate(
+    state = str_extract(location, "[A-Z]{2}$"),
+    energy_region = case_when(
+      state == "TX" ~ "ERCO",
+      state %in% c("CA") ~ "CISO",
+      state %in% c("NY", "MA", "PA") ~ "NYIS",
+      state %in% c("FL") ~ "FPL",
+      state %in% c("IL", "OH", "IN") ~ "MISO",
+      state %in% c("GA", "NC", "SC", "VA") ~ "SERC",
+      state %in% c("AZ") ~ "SRP",
+      state %in% c("CO") ~ "WACM",
+      state %in% c("WA", "OR") ~ "BPAT",
+      TRUE ~ "OTHER"
+    )
+  ) %>%
+  select(location, energy_region)
+
+# Save mapping table for GitHub tracking
+if (github_connected) {
+  write_csv(location_mapping, "data/processed/location_mapping_simple.csv")
+  commit_and_push_changes("Added location-energy mapping for simple merge", 
+                         "data/processed/location_mapping_simple.csv")
+}
+
+# Create a cross-reference table to handle multiple energy regions per location
+energy_regions_expanded <- energy_prepared %>%
+  select(energy_region, type, timezone) %>%
+  distinct()
+
+# Record merge start time
+merge_start_time <- Sys.time()
+
+# Merge the weather and energy data
+merged_data <- weather_daily_by_location %>%
+  left_join(location_mapping, by = "location") %>%
+  inner_join(
+    energy_prepared,
+    by = c("date", "energy_region"),
+    relationship = "many-to-many"  # Allow multiple matches
+  ) %>%
+  arrange(location, date, type) %>%
+  select(
+    location,
+    date,
+    latitude,
+    longitude,
+    temp_mean,
+    temp_min,
+    temp_max,
+    temp_range,
+    humidity_mean,
+    precipitation_total,
+    wind_speed_mean,
+    wind_speed_max,
+    cloud_cover_mean,
+    hourly_records,
+    energy_region,
+    energy_region_full_name,
+    period,
+    `respondent-name`,
+    type,
+    `type-name`,
+    timezone,
+    `timezone-description`,
+    value,
+    `value-units`
+  )
+
+# Record merge end time and calculate duration
+merge_end_time <- Sys.time()
+merge_duration <- difftime(merge_end_time, merge_start_time, units = "secs")
+cat("Merge completed in", round(merge_duration, 2), "seconds\n")
+
+# Save the merged data
+saveRDS(merged_data, "../data/processed/merged_data.rds")
+write_csv(merged_data, "../data/processed/merged_data.csv")
+
+# Create a sample of merged data for GitHub tracking
+if (github_connected) {
+  # Create a merged data summary for GitHub
+  merged_summary <- create_data_summary(merged_data, "merged_data_simple")
+  
+  # Create a sample file
+  sample_size <- min(50, nrow(merged_data))
+  write_csv(
+    merged_data %>% sample_n(sample_size),
+    "data/processed/merged_data_sample_simple.csv"
+  )
+  
+  # Commit to GitHub
+  commit_and_push_changes("Added merged data sample and summary from simple merge", 
+                         c("data/processed/merged_data_sample_simple.csv", merged_summary))
+}
+
+# Check the structure and summary
+cat("Merged data structure:\n")
+str(merged_data)
+cat("\nMerged data dimensions:", dim(merged_data), "\n")
+cat("Date range:", as.character(min(merged_data$date)), "to",
+     as.character(max(merged_data$date)), "\n")
+cat("Number of unique locations:", n_distinct(merged_data$location), "\n")
+cat("Number of unique energy regions:", n_distinct(merged_data$energy_region), "\n")
+
+# Create merge validation report for GitHub
+if (github_connected) {
+  # Create validation report
+  validation_report <- list(
+    merge_date = as.character(Sys.Date()),
+    merge_duration_seconds = as.numeric(merge_duration),
+    merged_records = nrow(merged_data),
+    unique_locations = n_distinct(merged_data$location),
+    unique_energy_regions = n_distinct(merged_data$energy_region),
+    date_range = c(as.character(min(merged_data$date)), as.character(max(merged_data$date)))
+  )
+  
+  # Save as JSON
+  validation_file <- "data/processed/merge_validation_simple.json"
+  jsonlite::write_json(validation_report, validation_file, pretty = TRUE, auto_unbox = TRUE)
+  
+  # Commit to GitHub
+  commit_and_push_changes("Added merge validation report for simple merge", validation_file)
+}
+
+# Show sample of the merged data
+cat("\nSample of merged data:\n")
+print(head(merged_data, 10))
+
+# Summary by location and energy type
+summary_table <- merged_data %>%
+  group_by(location, type) %>%
+  summarise(
+    records = n(),
+    avg_temp = mean(temp_mean, na.rm = TRUE),
+    total_value = sum(as.numeric(value), na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+# Save summary table for GitHub
+if (github_connected) {
+  write_csv(summary_table, "data/processed/merge_summary_by_location_type.csv")
+  commit_and_push_changes("Added merge summary by location and energy type", 
+                         "data/processed/merge_summary_by_location_type.csv")
+  
+  # Update a merge completion log
+  completion_log <- data.frame(
+    timestamp = Sys.time(),
+    records_merged = nrow(merged_data),
+    locations = n_distinct(merged_data$location),
+    energy_regions = n_distinct(merged_data$energy_region)
+  )
+  
+  write_csv(completion_log, "data/processed/merge_completion_log.csv")
+  commit_and_push_changes("Updated merge completion log", "data/processed/merge_completion_log.csv")
+  
+  # Print final merge summary
+  cat("\n==== WEATHER-ENERGY DATA MERGE COMPLETED ====\n")
+  cat(sprintf("Merge completed on: %s\n", format(Sys.Date())))
+  cat(sprintf("Total merged records: %d\n", nrow(merged_data)))
+  cat(sprintf("Weather locations: %d\n", n_distinct(merged_data$location)))
+  cat(sprintf("Energy regions: %d\n", n_distinct(merged_data$energy_region)))
+  cat(sprintf("Merge time: %.2f seconds\n", as.numeric(merge_duration)))
+  cat("\nMerge tracked in GitHub for reproducibility.\n")
+}
+
+cat("\nSummary by location and energy type:\n")
+print(head(summary_table, 15))
+```
+
