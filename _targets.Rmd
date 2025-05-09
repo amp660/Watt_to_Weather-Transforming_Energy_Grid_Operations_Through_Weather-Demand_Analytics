@@ -1,0 +1,211 @@
+# _targets.R file
+# Weather-Energy Data Warehouse Project
+# This file defines the project workflow using the targets package
+
+```{r}
+# Load packages required for workflow definition
+library(targets)
+library(tarchetypes)
+library(tidyverse)
+library(lubridate)
+library(httr)
+library(jsonlite)
+
+# Source custom functions
+source("R/weather_functions.R")
+source("R/energy_functions.R")
+source("R/analysis_functions.R")
+source("R/visualization_functions.R")
+
+# Set target options
+tar_option_set(
+  packages = c(
+    "tidyverse", "httr", "jsonlite", "lubridate", "readxl", "plotly", "DT", 
+    "corrplot", "skimr", "ggpubr", "scales", "viridis", "patchwork", 
+    "janitor", "digest", "mgcv", "lmtest", "car", "quantreg", "segmented", 
+    "nlme", "sandwich", "boot", "randomForest", "gbm", "caret"
+  ),
+  format = "rds",
+  error = "continue"
+)
+
+# Define global constants
+config <- list(
+  start_date = "2024-01-01",
+  end_date = "2024-12-31",
+  weather_api_base_url = "https://archive-api.open-meteo.com/v1/era5",
+  energy_api_base_url = "https://api.eia.gov/v2/electricity/rto/daily-region-data/data/",
+  data_dir = "data",
+  figures_dir = "output/figures"
+)
+
+# Define project targets list
+list(
+  # Create necessary directories
+  tar_target(
+    directories,
+    create_project_directories(config),
+    deployment = "main"
+  ),
+  
+  # Load US location data
+  tar_target(
+    us_locations,
+    read_us_locations("data/raw/us_locations_metadata.csv")
+  ),
+  
+  # Weather data acquisition and processing
+  tar_target(
+    weather_raw_data,
+    fetch_weather_data(us_locations, config$start_date, config$end_date, config$weather_api_base_url)
+  ),
+  
+  tar_target(
+    weather_clean_data,
+    clean_weather_data(weather_raw_data)
+  ),
+  
+  tar_target(
+    weather_daily_data,
+    aggregate_weather_to_daily(weather_clean_data)
+  ),
+  
+  tar_target(
+    weather_summary,
+    create_weather_summary(weather_clean_data)
+  ),
+  
+  # Energy data acquisition and processing
+  tar_target(
+    energy_raw_data,
+    fetch_energy_data(config$energy_api_base_url, config$start_date, config$end_date)
+  ),
+  
+  tar_target(
+    energy_clean_data,
+    clean_energy_data(energy_raw_data)
+  ),
+  
+  tar_target(
+    energy_summary,
+    create_energy_summary(energy_clean_data)
+  ),
+  
+  # Data integration
+  tar_target(
+    location_mapping,
+    create_location_mapping(weather_daily_data)
+  ),
+  
+  tar_target(
+    merged_data,
+    merge_weather_energy_data(weather_daily_data, energy_clean_data, location_mapping)
+  ),
+  
+  # Statistical analysis
+  tar_target(
+    demand_data,
+    prepare_demand_data(merged_data)
+  ),
+  
+  tar_target(
+    quadratic_model,
+    fit_quadratic_model(demand_data)
+  ),
+  
+  tar_target(
+    optimal_temperature,
+    calculate_optimal_temperature(quadratic_model)
+  ),
+  
+  tar_target(
+    temperature_elasticity,
+    calculate_temperature_elasticity(demand_data, optimal_temperature)
+  ),
+  
+  tar_target(
+    regional_sensitivity,
+    analyze_regional_sensitivity(demand_data)
+  ),
+  
+  tar_target(
+    seasonal_effects,
+    analyze_seasonal_effects(demand_data)
+  ),
+  
+  tar_target(
+    predictive_models,
+    fit_predictive_models(demand_data)
+  ),
+  
+  tar_target(
+    economic_impact,
+    calculate_economic_impact(demand_data, optimal_temperature)
+  ),
+  
+  # Visualizations
+  tar_target(
+    u_shape_plot,
+    create_u_shape_plot(demand_data),
+    format = "file"
+  ),
+  
+  tar_target(
+    seasonal_plot,
+    create_seasonal_plot(demand_data),
+    format = "file"
+  ),
+  
+  tar_target(
+    regional_plot,
+    create_regional_plot(regional_sensitivity),
+    format = "file"
+  ),
+  
+  tar_target(
+    economic_impact_plot,
+    create_economic_impact_plot(economic_impact),
+    format = "file"
+  ),
+  
+  # Interactive visualizations
+  tar_target(
+    interactive_3d_plot,
+    create_interactive_3d_plot(demand_data),
+    format = "file"
+  ),
+  
+  tar_target(
+    interactive_map,
+    create_interactive_map(regional_sensitivity),
+    format = "file"
+  ),
+  
+  # Final report
+  tar_target(
+    report_data,
+    prepare_report_data(
+      optimal_temperature, 
+      temperature_elasticity, 
+      regional_sensitivity, 
+      seasonal_effects, 
+      predictive_models, 
+      economic_impact
+    )
+  ),
+  
+  # RMarkdown reports
+  tar_render(
+    report,
+    "reports/final_report.Rmd",
+    packages = c("rmarkdown", "knitr", "kableExtra", "plotly")
+  ),
+  
+  tar_render(
+    dashboard,
+    "reports/interactive_dashboard.Rmd",
+    packages = c("rmarkdown", "knitr", "kableExtra", "plotly", "flexdashboard")
+  )
+)
+```
+
