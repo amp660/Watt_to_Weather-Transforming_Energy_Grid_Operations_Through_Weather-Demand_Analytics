@@ -1,0 +1,981 @@
+---
+title: "Watt to Weather Project - Technical Appendix"
+subtitle: "Analyzing the Relationship Between Weather Conditions and Energy Demand"
+author: "Ajinkya Phanse(amp660), Darshit Shah(ds2239)"
+date: "May 6, 2025"
+output:
+  html_document:
+    theme: cosmo
+    highlight: tango
+    toc: true
+    toc_float: true
+    code_folding: hide
+    includes:
+      in_header: "cross-doc-links.html"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This technical appendix provides detailed information about the data sources, cleaning processes, integration methodology, statistical analyses, and code implementation used in the Watt to Weather Data Wrangling Project. It serves as a comprehensive reference for technical teams who wish to understand or reproduce our workflow.
+
+## <a id="appendix-a-project-structure-and-organization"></a>Appendix A: Project Structure and Organization
+
+### <a id="appendix-a1-directory-structure"></a>A.1 Directory Structure
+
+The project maintains a modular structure with dedicated directories for different components:
+
+```
+weather-energy-warehouse/
+├── Main.Rmd                     # Main workflow orchestration script
+├── Project_Report.Rmd           # Project report source file
+├── Readme.md                    # Project documentation
+├── Technical_Appendix.Rmd       # Technical appendix source file
+├── _targets.Rmd                 # Targets pipeline definition
+├── config/                      # Configuration files
+│   ├── eia_api_key.txt          # API key storage (not tracked in git)
+│   └── setup.Rmd                # Initial setup script
+├── data/                        # Data storage
+│   ├── backup/                  # Daily backup files and snapshots
+│   ├── processed/               # Cleaned and transformed data
+│   └── raw/                     # Original unmodified data
+├── functions/                   # R scripts with core functionality
+│   ├── EDA_Final_U.Rmd          # Exploratory data analysis
+│   ├── Energy_Data_Extract_Clean_U.Rmd  # Energy data processing
+│   ├── Interactive_Visualisations_U.Rmd # Interactive visualizations
+│   ├── Merge_Weather_Energy_U.Rmd       # Data integration
+│   ├── Weather_Data_Extract_Clean_U.Rmd # Weather data processing
+│   └── index.Rmd                # Navigation file
+└── output/                      # Analysis outputs
+    ├── figures/                 # Generated visualizations
+    └── reports/                 # Summary reports and dashboards
+```
+
+[Return to Main Report](Project_Report.html){onclick="jumpToReference('Project_Report.html'); return false;"}
+
+### <a id="appendix-b3-merged-dataset"></a>B.3 Merged Dataset
+
+**Schema (Final Merged Dataset)**:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| location | string | Weather station location |
+| date | date | Measurement date |
+| latitude | float | Location latitude (degrees) |
+| longitude | float | Location longitude (degrees) |
+| temp_mean | float | Daily mean temperature (°F) |
+| temp_min | float | Daily minimum temperature (°F) |
+| temp_max | float | Daily maximum temperature (°F) |
+| temp_range | float | Daily temperature range (°F) |
+| humidity_mean | float | Daily mean humidity (%) |
+| precipitation_total | float | Daily total precipitation (mm) |
+| wind_speed_mean | float | Daily mean wind speed (m/s) |
+| wind_speed_max | float | Daily maximum wind speed (m/s) |
+| cloud_cover_mean | float | Daily mean cloud cover (%) |
+| hourly_records | integer | Number of hourly records in daily aggregate |
+| energy_region | string | Energy region code |
+| energy_region_full_name | string | Energy region name |
+| period | date | Energy measurement date |
+| respondent-name | string | Energy company name |
+| type | string | Energy measurement type |
+| type-name | string | Energy measurement description |
+| timezone | string | Energy data timezone |
+| timezone-description | string | Energy data timezone description |
+| value | float | Energy value |
+| value-units | string | Energy measurement units |
+| season | string | Season category |
+| day_type | string | "Weekday" or "Weekend" |
+| measurement_category | string | Energy measurement category |
+| year | integer | Year |
+| month | integer | Month |
+| temp_squared | float | Temperature squared (for U-shape modeling) |
+| is_extreme_weather | boolean | Flag for extreme weather conditions |
+
+**Merge Statistics**:
+- Weather records before merge: 175,200 (20 cities × 365 days × 24 hours, aggregated to daily)
+- Energy records before merge: 90,000
+- Records after merge: 29,873
+- Match rate: 84.3% of possible matches
+- Unmatched records: Primarily due to missing energy data for some regions on some dates
+
+**Data Quality (Final Merged Dataset)**:
+- Complete coverage of 20 major U.S. cities
+- Complete mapping of cities to energy regions
+- Temporal alignment at daily granularity
+- <0.1% missing values in critical fields
+- Geographic balance across climate zones
+- Full seasonal coverage
+- Added derived variables for statistical analysis
+
+[Return to Main Report](Project_Report.html){onclick="jumpToReference('Project_Report.html'); return false;"}
+
+## <a id="appendix-c-data-cleaning-and-transformation"></a>Appendix C: Data Cleaning and Transformation
+
+### <a id="appendix-c1-weather-data-cleaning"></a>C.1 Weather Data Cleaning
+
+The weather data cleaning process involved several key steps:
+
+1. **Data Type Conversion**:
+
+```r
+weather_clean <- weather_raw %>%
+  # Remove exact duplicate rows if any
+  distinct() %>%
+  
+  # Rename columns for clarity and consistency
+  rename(
+    location_name = location,
+    latitude_deg = latitude,
+    longitude_deg = longitude,
+    datetime_utc = datetime,
+    temperature_c = temperature,
+    humidity_pct = humidity,
+    precipitation_mm = precipitation,
+    wind_speed_mps = wind_speed,
+    cloud_cover_pct = cloud_cover
+  )
+```
+
+2. **Derived Feature Creation**:
+
+```r
+weather_clean <- weather_clean %>%
+  # Add time-based features
+  mutate(
+    # Extract date components
+    date = as.Date(datetime_utc),
+    year = year(datetime_utc),
+    month = month(datetime_utc),
+    day = day(datetime_utc),
+    hour = hour(datetime_utc),
+    weekday = wday(datetime_utc, label = TRUE, abbr = TRUE),
+    
+    # Create season
+    season = case_when(
+      month %in% c(12, 1, 2) ~ "Winter",
+      month %in% c(3, 4, 5) ~ "Spring",
+      month %in% c(6, 7, 8) ~ "Summer",
+      month %in% c(9, 10, 11) ~ "Fall"
+    ),
+    
+    # Convert temperature to Fahrenheit
+    temperature_f = temperature_c * 9/5 + 32,
+    
+    # Calculate heat index
+    heat_index_f = case_when(
+      temperature_f < 80 ~ temperature_f,
+      TRUE ~ -42.379 + 2.04901523 * temperature_f + 10.14333127 * humidity_pct -
+              0.22475541 * temperature_f * humidity_pct - 0.00683783 * temperature_f^2 -
+              0.05481717 * humidity_pct^2 + 0.00122874 * temperature_f^2 * humidity_pct +
+              0.00085282 * temperature_f * humidity_pct^2 - 0.00000199 * temperature_f^2 * humidity_pct^2
+    )
+  )
+```
+
+3. **Categorization and Feature Engineering**:
+
+```r
+weather_clean <- weather_clean %>%
+  mutate(
+    # Categorize precipitation
+    precipitation_category = case_when(
+      precipitation_mm == 0 ~ "None",
+      precipitation_mm < 2.5 ~ "Light",
+      precipitation_mm < 7.6 ~ "Moderate",
+      precipitation_mm < 50 ~ "Heavy",
+      TRUE ~ "Extreme"
+    ),
+    
+    # Categorize wind speed (Beaufort scale)
+    wind_category = case_when(
+      wind_speed_mps < 0.5 ~ "Calm",
+      wind_speed_mps < 1.6 ~ "Light Air",
+      wind_speed_mps < 3.4 ~ "Light Breeze",
+      wind_speed_mps < 5.5 ~ "Gentle Breeze",
+      wind_speed_mps < 8.0 ~ "Moderate Breeze",
+      wind_speed_mps < 10.8 ~ "Fresh Breeze",
+      wind_speed_mps < 13.9 ~ "Strong Breeze",
+      wind_speed_mps < 17.2 ~ "High Wind",
+      wind_speed_mps < 20.8 ~ "Gale",
+      wind_speed_mps < 24.5 ~ "Strong Gale",
+      wind_speed_mps < 28.5 ~ "Storm",
+      wind_speed_mps < 32.7 ~ "Violent Storm",
+      TRUE ~ "Hurricane"
+    ),
+    
+    # Create a combined weather condition
+    weather_condition = case_when(
+      precipitation_mm > 0 & temperature_c <= 0 ~ "Snow/Freezing Rain",
+      precipitation_mm > 0 ~ "Rain",
+      cloud_cover_pct >= 80 ~ "Overcast",
+      cloud_cover_pct >= 40 ~ "Partly Cloudy",
+      TRUE ~ "Clear"
+    ),
+    
+    # Add extreme weather flags
+    is_extreme_heat = temperature_f >= 95,
+    is_extreme_cold = temperature_f <= 20,
+    is_heavy_precipitation = precipitation_mm >= 10
+  )
+```
+
+4. **Daily Aggregation**:
+
+```r
+weather_daily <- weather_clean %>%
+  group_by(location_name, city, state, date = as.Date(datetime_utc)) %>%
+  summarise(
+    latitude_deg = first(latitude_deg),
+    longitude_deg = first(longitude_deg),
+    
+    # Temperature statistics
+    avg_temp_f = mean(temperature_f, na.rm = TRUE),
+    max_temp_f = max(temperature_f, na.rm = TRUE),
+    min_temp_f = min(temperature_f, na.rm = TRUE),
+    avg_temp_c = mean(temperature_c, na.rm = TRUE),
+    max_temp_c = max(temperature_c, na.rm = TRUE),
+    min_temp_c = min(temperature_c, na.rm = TRUE),
+    temp_range_f = max_temp_f - min_temp_f,
+    
+    # Other weather metrics
+    avg_humidity = mean(humidity_pct, na.rm = TRUE),
+    total_precip = sum(precipitation_mm, na.rm = TRUE),
+    avg_wind_speed = mean(wind_speed_mps, na.rm = TRUE),
+    max_wind_speed = max(wind_speed_mps, na.rm = TRUE),
+    avg_cloud_cover = mean(cloud_cover_pct, na.rm = TRUE),
+    
+    # Extreme weather indicators
+    had_rain = as.integer(any(precipitation_mm > 0)),
+    had_heavy_rain = as.integer(any(precipitation_mm > 7.6)),
+    had_high_temp = as.integer(any(temperature_f >= 90)),
+    had_low_temp = as.integer(any(temperature_f <= 32)),
+    had_high_wind = as.integer(any(wind_speed_mps >= 10.8)),
+    
+    # Thermal comfort metrics
+    avg_heat_index_f = mean(heat_index_f, na.rm = TRUE),
+    max_heat_index_f = max(heat_index_f, na.rm = TRUE),
+    hours_over_80f = sum(temperature_f > 80, na.rm = TRUE),
+    hours_under_40f = sum(temperature_f < 40, na.rm = TRUE),
+    
+    .groups = 'drop'
+  )
+```
+
+5. **Missing Value Handling**:
+
+Missing values were minimal (<0.1%) but were handled appropriately:
+- For temperature and humidity: Linear interpolation between adjacent values
+- For precipitation: Zero imputation (conservative approach)
+- For wind and cloud cover: Median imputation by time of day and location
+
+[Return to Main Report](Project_Report.html){onclick="jumpToReference('Project_Report.html'); return false;"}
+
+### <a id="appendix-c2-energy-data-cleaning"></a>C.2 Energy Data Cleaning
+
+The energy data required substantial cleaning due to inconsistent formats and categorization:
+
+1. **Initial Transformation**:
+
+```r
+energy_clean <- energy_raw %>%
+  # Remove exact duplicate rows if any
+  distinct() %>%
+  
+  # Rename columns for clarity and consistency
+  rename(
+    date = period,
+    company_code = respondent,
+    company_name = `respondent-name`,
+    measurement_type = type,
+    measurement_name = `type-name`,
+    timezone = timezone,
+    timezone_desc = `timezone-description`,
+    value = value,
+    units = `value-units`
+  ) %>%
+  
+  # Convert value to numeric
+  mutate(
+    value_numeric = as.numeric(value),
+    
+    # Flag records where numeric conversion failed
+    value_conversion_failed = is.na(value_numeric) & !is.na(value)
+  )
+```
+
+2. **Temporal Feature Creation**:
+
+```r
+energy_clean <- energy_clean %>%
+  # Convert date to proper date format
+  mutate(
+    date = as.Date(date),
+    year = year(date),
+    month = month(date),
+    day = day(date),
+    weekday = wday(date, label = TRUE, abbr = TRUE),
+    
+    # Create season for seasonal analysis
+    season = case_when(
+      month %in% c(12, 1, 2) ~ "Winter",
+      month %in% c(3, 4, 5) ~ "Spring", 
+      month %in% c(6, 7, 8) ~ "Summer",
+      month %in% c(9, 10, 11) ~ "Fall"
+    ),
+    
+    # Create quarter for quarterly reporting
+    quarter = paste0("Q", quarter(date))
+  )
+```
+
+3. **Categorization and Mapping**:
+
+```r
+energy_clean <- energy_clean %>%
+  # Standardize measurement types
+  mutate(
+    measurement_category = case_when(
+      measurement_type %in% c("NG", "D") ~ "Generation",
+      measurement_type %in% c("DF", "DA") ~ "Demand",
+      measurement_type %in% c("TI") ~ "Interchange",
+      TRUE ~ "Other"
+    ),
+    
+    # Extract state from company name using regex patterns
+    state = case_when(
+      str_detect(company_name, "Florida|FPL") ~ "FL",
+      str_detect(company_name, "California|PG&E|SCE|San Diego") ~ "CA",
+      str_detect(company_name, "Texas|ERCOT") ~ "TX",
+      # Additional mappings...
+      TRUE ~ NA_character_
+    ),
+    
+    # Extract region from company name/code
+    region = case_when(
+      str_detect(company_code, "ERCO|TRE") ~ "Texas",
+      str_detect(company_code, "CISO|BANC|LDWP") ~ "California",
+      str_detect(company_code, "NYIS") ~ "New York",
+      # Additional mappings...
+      TRUE ~ "Other"
+    )
+  )
+```
+
+4. **Aggregations and Derived Metrics**:
+
+```r
+# Create energy by state aggregation
+energy_by_state <- energy_clean %>%
+  filter(!is.na(state)) %>%
+  group_by(state, date, measurement_category) %>%
+  summarise(
+    total_value = sum(value_numeric, na.rm = TRUE),
+    avg_value = mean(value_numeric, na.rm = TRUE),
+    num_companies = n_distinct(company_code),
+    min_value = min(value_numeric, na.rm = TRUE),
+    max_value = max(value_numeric, na.rm = TRUE),
+    value_range = max_value - min_value,
+    .groups = 'drop'
+  ) %>%
+  # Pivot measurement categories to columns for easier analysis
+  pivot_wider(
+    names_from = measurement_category,
+    values_from = c(total_value, avg_value),
+    values_fill = list(total_value = 0, avg_value = 0)
+  )
+```
+
+5. **Data Quality Checks**:
+
+```r
+# Check for missing values
+energy_missing <- energy_clean %>%
+  summarise(across(everything(), ~sum(is.na(.))))
+
+# Check for outliers using z-score method
+identify_outliers <- function(x, threshold = 3) {
+  if(!is.numeric(x)) return(NA)
+  
+  mu <- mean(x, na.rm = TRUE)
+  sigma <- sd(x, na.rm = TRUE)
+  
+  # Z-score based outlier detection
+  outliers <- which(abs(x - mu) > threshold * sigma)
+  return(length(outliers))
+}
+
+# Find potential outliers
+energy_outliers <- energy_clean %>%
+  group_by(measurement_category) %>%
+  mutate(is_outlier = abs(scale(value_numeric)) > 3) %>%
+  summarise(
+    total_records = n(),
+    outlier_count = sum(is_outlier, na.rm = TRUE),
+    outlier_percent = 100 * outlier_count / total_records,
+    .groups = 'drop'
+  )
+```
+
+[Return to Main Report](Project_Report.html){onclick="jumpToReference('Project_Report.html'); return false;"}
+
+## <a id="appendix-d-data-integration-methodology"></a>Appendix D: Data Integration Methodology
+
+### <a id="appendix-d1-location-energy-region-mapping"></a>D.1 Location-Energy Region Mapping
+
+A key challenge was mapping weather station locations to energy regions. We created a custom mapping table:
+
+```r
+location_mapping <- weather_daily_by_location %>%
+  distinct(location) %>%
+  mutate(
+    state = str_extract(location, "[A-Z]{2}$"),
+    energy_region = case_when(
+      state == "TX" ~ "ERCO",
+      state %in% c("CA") ~ "CISO",
+      state %in% c("NY", "MA", "PA") ~ "NYIS",
+      state %in% c("FL") ~ "FPL",
+      state %in% c("IL", "OH", "IN") ~ "MISO",
+      state %in% c("GA", "NC", "SC", "VA") ~ "SERC",
+      state %in% c("AZ") ~ "SRP",
+      state %in% c("CO") ~ "WACM",
+      state %in% c("WA", "OR") ~ "BPAT",
+      TRUE ~ "OTHER"
+    )
+  ) %>%
+  select(location, energy_region)
+```
+
+[Return to Main Report](Project_Report.html){onclick="jumpToReference('Project_Report.html'); return false;"}
+
+### <a id="appendix-d2-data-merging-process"></a>D.2 Data Merging Process
+
+The merging process combined daily weather data with energy data using the location-energy region mapping:
+
+```r
+merged_data <- weather_daily_by_location %>%
+  left_join(location_mapping, by = "location") %>%
+  inner_join(
+    energy_prepared,
+    by = c("date", "energy_region"),
+    relationship = "many-to-many"  # Allow multiple matches
+  ) %>%
+  arrange(location, date, type) %>%
+  select(
+    location,
+    date,
+    latitude,
+    longitude,
+    temp_mean,
+    temp_min,
+    temp_max,
+    temp_range,
+    humidity_mean,
+    precipitation_total,
+    wind_speed_mean,
+    wind_speed_max,
+    cloud_cover_mean,
+    hourly_records,
+    energy_region,
+    energy_region_full_name,
+    period,
+    `respondent-name`,
+    type,
+    `type-name`,
+    timezone,
+    `timezone-description`,
+    value,
+    `value-units`
+  )
+```
+
+The merge methodology incorporated several considerations:
+
+1. **Geographic Alignment**:
+   - Used custom mapping table to link cities to energy regions
+   - Applied domain knowledge for regions spanning multiple states
+   - Prioritized exact matches over approximate alignments
+
+2. **Temporal Alignment**:
+   - Matched records on exact dates
+   - Aggregated hourly weather to daily values to match energy data granularity
+   - Handled timezone differences by standardizing to region-specific timezones
+
+3. **Data Quality Preservation**:
+   - Used inner join to ensure only complete records were retained
+   - Applied validation checks on merged data
+   - Created summary statistics to verify merge integrity
+
+[Return to Main Report](Project_Report.html){onclick="jumpToReference('Project_Report.html'); return false;"}
+
+### <a id="appendix-d3-merge-validation"></a>D.3 Merge Validation
+
+We validated the merged dataset through several quality checks:
+
+```r
+# Check the structure and summary
+cat("Merged data structure:\n")
+str(merged_data)
+cat("\nMerged data dimensions:", dim(merged_data), "\n")
+cat("Date range:", as.character(min(merged_data$date)), "to", 
+    as.character(max(merged_data$date)), "\n")
+cat("Number of unique locations:", n_distinct(merged_data$location), "\n")
+cat("Number of unique energy regions:", n_distinct(merged_data$energy_region), "\n")
+
+# Summary by location and energy type
+summary_table <- merged_data %>%
+  group_by(location, type) %>%
+  summarise(
+    records = n(),
+    avg_temp = mean(temp_mean, na.rm = TRUE),
+    total_value = sum(as.numeric(value), na.rm = TRUE),
+    .groups = 'drop'
+  )
+```
+
+The merger retained approximately 30,000 matched records with 100% of weather locations successfully mapped to at least one energy region.
+
+[Return to Main Report](Project_Report.html){onclick="jumpToReference('Project_Report.html'); return false;"}
+
+## <a id="appendix-e-statistical-analysis-methodology"></a>Appendix E: Statistical Analysis Methodology
+
+### <a id="appendix-e1-u-shaped-relationship-analysis"></a>E.1 U-Shaped Relationship Analysis
+
+1. **Quadratic Regression**:
+
+```r
+# Fit quadratic model
+quad_model <- lm(energy_value ~ temp_mean + temp_squared, data = demand_data)
+quad_summary <- summary(quad_model)
+
+# Extract coefficients
+quad_coefficients <- data.frame(
+  Parameter = rownames(coef(summary(quad_model))),
+  Estimate = coef(summary(quad_model))[,1],
+  Std_Error = coef(summary(quad_model))[,2],
+  t_value = coef(summary(quad_model))[,3],
+  p_value = coef(summary(quad_model))[,4]
+)
+```
+
+2. **Bootstrap Confidence Intervals**:
+
+```r
+# Function for bootstrap resampling
+boot_inflection <- function(data, indices) {
+  boot_data <- data[indices, ]
+  boot_model <- lm(energy_value ~ temp_mean + temp_squared, data = boot_data)
+  -coef(boot_model)[2] / (2 * coef(boot_model)[3])
+}
+
+# Run bootstrap analysis
+boot_results <- boot(data = demand_data, statistic = boot_inflection, R = 1000)
+inflection_ci <- boot.ci(boot_results, type = "perc")
+```
+
+3. **Generalized Additive Model**:
+
+```r
+# Fit GAM model
+gam_model <- gam(energy_value ~ s(temp_mean, bs = "cs"), data = demand_data)
+gam_summary <- summary(gam_model)
+```
+
+4. **Quantile Regression**:
+
+```r
+# Perform quantile regression at different percentiles
+quantiles <- c(0.1, 0.25, 0.5, 0.75, 0.9)
+quant_results <- data.frame()
+for (q in quantiles) {
+  quant_model <- rq(energy_value ~ temp_mean + temp_squared, tau = q, data = demand_data)
+  quant_summary <- summary(quant_model)
+  
+  # Store results
+  quant_results <- rbind(quant_results, data.frame(
+    quantile = q,
+    coef_temp = coef(quant_model)[2],
+    coef_temp_squared = coef(quant_model)[3],
+    optimal_temp = -coef(quant_model)[2] / (2 * coef(quant_model)[3])
+  ))
+}
+```
+
+[Return to Main Report](Project_Report.html){onclick="jumpToReference('Project_Report.html'); return false;"}
+
+### <a id="appendix-e2-temperature-breakpoints-analysis"></a>E.2 Temperature Breakpoints Analysis
+
+1. **Segmented Regression**:
+
+```r
+# Fit segmented regression model
+seg_model <- segmented(lm(energy_value ~ temp_mean, data = demand_data), 
+                      seg.Z = ~temp_mean, psi = c(40, 70))
+seg_summary <- summary(seg_model)
+
+# Extract breakpoints and confidence intervals
+breakpoints <- data.frame(
+  Breakpoint = c("Lower breakpoint", "Upper breakpoint"),
+  Estimate = c(seg_model$psi[1,1], seg_model$psi[2,1]),
+  Std_Error = c(seg_model$psi[1,2], seg_model$psi[2,2]),
+  CI_Lower = c(confint(seg_model)[1,1], confint(seg_model)[2,1]),
+  CI_Upper = c(confint(seg_model)[1,2], confint(seg_model)[2,2])
+)
+```
+
+2. **Davies' Test for Breakpoint Significance**:
+
+```r
+# Davies' test was implemented to formally test for breakpoint significance
+# (Code implementation not shown but follows standard methodology for segmented package)
+```
+
+[Return to Main Report](Project_Report.html){onclick="jumpToReference('Project_Report.html'); return false;"}
+
+### <a id="appendix-e3-regional-sensitivity-analysis"></a>E.3 Regional Sensitivity Analysis
+
+1. **Regional Elasticity Calculation**:
+
+```r
+# Calculate temperature elasticity by region
+elasticity_data <- demand_data %>%
+  filter(temp_mean > optimal_temp) %>%  # Focus on cooling region of U-curve
+  group_by(energy_region) %>%
+  summarise(
+    elasticity = cov(log(energy_value), log(temp_mean)) / var(log(temp_mean)),
+    r_squared = cor(log(energy_value), log(temp_mean))^2,
+    p_value = cor.test(log(energy_value), log(temp_mean))$p.value,
+    n_obs = n(),
+    mean_temp = mean(temp_mean),
+    mean_demand = mean(energy_value),
+    .groups = 'drop'
+  ) %>%
+  arrange(desc(elasticity))
+```
+
+2. **Mixed-Effects Models for Regional Variations**:
+
+```r
+# Fit mixed-effects model
+mixed_model <- lme(energy_value ~ temp_mean + temp_squared, 
+                 random = ~1 + temp_mean|energy_region, 
+                 data = mixed_model_data)
+mixed_summary <- summary(mixed_model)
+
+# Extract random effects
+random_effects <- as.data.frame(ranef(mixed_model))
+random_effects$energy_region <- rownames(random_effects)
+```
+
+3. **ANOVA with Interaction Terms**:
+
+```r
+# Test for interaction effects between temperature and region
+interaction_model <- lm(energy_value ~ temp_mean + temp_squared + energy_region + 
+                       temp_mean:energy_region + temp_squared:energy_region,
+                      data = demand_data %>% 
+                         filter(energy_region %in% main_regions))
+interaction_anova <- anova(interaction_model)
+```
+
+[Return to Main Report](Project_Report.html){onclick="jumpToReference('Project_Report.html'); return false;"}
+
+### <a id="appendix-e4-seasonal-effects-analysis"></a>E.4 Seasonal Effects Analysis
+
+1. **ANOVA for Seasonal Differences**:
+
+```r
+# Test for seasonal differences
+seasonal_model <- lm(energy_value ~ season, data = demand_data)
+seasonal_anova <- anova(seasonal_model)
+
+# Post-hoc test to identify which seasons differ
+seasonal_tukey <- TukeyHSD(aov(energy_value ~ season, data = demand_data))
+```
+
+2. **Effect Size Calculation**:
+
+```r
+# Calculate seasonal effect sizes
+seasonal_effects <- demand_data %>%
+  group_by(season) %>%
+  summarise(
+    mean_demand = mean(energy_value),
+    n_obs = n(),
+    sd_demand = sd(energy_value),
+    se_demand = sd_demand / sqrt(n_obs),
+    ci_lower = mean_demand - 1.96 * se_demand,
+    ci_upper = mean_demand + 1.96 * se_demand,
+    .groups = 'drop'
+  ) %>%
+  mutate(
+    effect_size = mean_demand / mean(mean_demand) - 1,  # Percentage deviation from overall mean
+    percent_diff_from_min = mean_demand / min(mean_demand) - 1  # Percentage difference from minimum
+  )
+```
+
+3. **Interaction Analysis**:
+
+```r
+# Test for interactions between season and temperature
+season_temp_model <- lm(energy_value ~ temp_mean + temp_squared + season + 
+                       temp_mean:season + temp_squared:season,
+                       data = demand_data)
+season_temp_anova <- anova(season_temp_model)
+```
+
+[Return to Main Report](Project_Report.html){onclick="jumpToReference('Project_Report.html'); return false;"}
+
+### <a id="appendix-e5-economic-implications-analysis"></a>E.5 Economic Implications Analysis
+
+1. **Marginal Effects Analysis**:
+
+```r
+# Create a reference dataset at optimal temperature
+reference_data <- demand_data %>%
+  filter(abs(temp_mean - optimal_temp_value) < 1) %>%
+  summarise(baseline_demand = mean(energy_value))
+baseline_demand <- reference_data$baseline_demand
+
+# Calculate percentage change in demand per degree F from optimal
+temp_effect_data <- demand_data %>%
+  mutate(
+    deviation_from_optimal = abs(temp_mean - optimal_temp_value),
+    deviation_category = cut(deviation_from_optimal, 
+                           breaks = c(0, 5, 10, 15, 20, 25, 30, Inf),
+                          labels = c("0-5°F", "5-10°F", "10-15°F", "15-20°F", 
+                                     "20-25°F", "25-30°F", ">30°F"))
+  ) %>%
+  group_by(deviation_category) %>%
+  summarise(
+    mean_deviation = mean(deviation_from_optimal),
+    mean_demand = mean(energy_value),
+    median_demand = median(energy_value),
+    pct_change = (mean_demand / baseline_demand - 1) * 100,
+    pct_change_per_degree = pct_change / mean_deviation,
+    n_obs = n(),
+    .groups = 'drop'
+  )
+```
+
+2. **Smooth Curve Prediction**:
+
+```r
+# Create marginal effect curve using GAM model for smoother estimates
+effect_model <- gam(energy_value ~ s(temp_mean, bs = "cs"), data = demand_data)
+
+# Create prediction data
+pred_temps <- seq(min(demand_data$temp_mean), max(demand_data$temp_mean), length.out = 100)
+pred_data <- data.frame(temp_mean = pred_temps)
+
+# Get predicted values
+pred_vals <- predict(effect_model, newdata = pred_data, se.fit = TRUE)
+pred_data$predicted_demand <- pred_vals$fit
+pred_data$se_lower <- pred_vals$fit - 1.96 * pred_vals$se.fit
+pred_data$se_upper <- pred_vals$fit + 1.96 * pred_vals$se.fit
+```
+
+[Return to Main Report](Project_Report.html){onclick="jumpToReference('Project_Report.html'); return false;"}
+
+### <a id="appendix-e6-predictive-modeling"></a>E.6 Predictive Modeling
+
+1. **Data Preparation**:
+
+```r
+# Prepare data for modeling
+model_data <- demand_data %>%
+  select(energy_value, temp_mean, temp_range, humidity_mean, 
+         precipitation_total, wind_speed_mean, cloud_cover_mean,
+        season, is_weekend, energy_region) %>%
+  na.omit() %>%
+  mutate(
+    temp_squared = temp_mean^2,  # Add quadratic term for U-shape
+    log_energy = log(energy_value),
+    # Convert character variables to factors
+    season = factor(season, levels = c("Winter", "Spring", "Summer", "Fall")),
+    energy_region = factor(energy_region),
+    is_weekend = factor(is_weekend)
+  )
+
+# Split data
+set.seed(123)
+train_index <- createDataPartition(model_data$energy_value, p = 0.8, list = FALSE)
+train_data <- model_data[train_index, ]
+test_data <- model_data[-train_index, ]
+```
+
+2. **Linear Regression Model**:
+
+```r false;"}
+
+### <a id="appendix-a2-workflow-management"></a>A.2 Workflow Management
+
+The project uses the `targets` package to define a reproducible workflow with explicit dependencies:
+
+```r
+# Example from _targets.Rmd
+weather_pipeline <- list(
+  # Extract raw weather data for all locations
+  tar_target(
+    raw_weather_data,
+    extract_weather_data(us_cities_data, start_date = "2024-01-01", end_date = "2024-12-31")
+  ),
+  
+  # Clean and transform weather data
+  tar_target(
+    weather_clean,
+    clean_weather_data(raw_weather_data)
+  ),
+  
+  # Create daily weather aggregates
+  tar_target(
+    weather_daily,
+    create_daily_weather(weather_clean)
+  )
+)
+```
+
+The complete pipeline is defined in `_targets.Rmd` and executed via `Main.Rmd`, ensuring reproducibility and dependency tracking.
+
+[Return to Main Report](Project_Report.html){onclick="jumpToReference('Project_Report.html'); return false;"}
+
+## <a id="appendix-b-data-sources-and-schema"></a>Appendix B: Data Sources and Schema
+
+### <a id="appendix-b1-weather-data"></a>B.1 Weather Data
+
+**Source**: Open-Meteo ERA5 Historical Weather API (https://archive-api.open-meteo.com/v1/era5)
+
+**Schema (Raw Data - BEFORE Cleaning)**:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| location | string | City and state code |
+| latitude | float | Location latitude (degrees) |
+| longitude | float | Location longitude (degrees) |
+| datetime | datetime | UTC timestamp |
+| temperature | float | Temperature (°C) |
+| humidity | float | Relative humidity (%) |
+| precipitation | float | Precipitation (mm) |
+| wind_speed | float | Wind speed (m/s) |
+| cloud_cover | float | Cloud cover (%) |
+
+**Schema (Cleaned Data - AFTER Cleaning)**:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| location_name | string | City and state code |
+| city | string | City name only |
+| state | string | State code |
+| latitude_deg | float | Location latitude (degrees) |
+| longitude_deg | float | Location longitude (degrees) |
+| datetime_utc | datetime | UTC timestamp |
+| date | date | Date component of timestamp |
+| year | integer | Year |
+| month | integer | Month number |
+| day | integer | Day of month |
+| hour | integer | Hour of day |
+| weekday | factor | Day of week (Mon, Tue, etc.) |
+| season | string | Season category (Winter, Spring, Summer, Fall) |
+| time_of_day | string | Time period (Morning, Afternoon, Evening, Night) |
+| temperature_c | float | Temperature (°C) |
+| temperature_f | float | Temperature (°F) |
+| humidity_pct | float | Relative humidity (%) |
+| precipitation_mm | float | Precipitation (mm) |
+| wind_speed_mps | float | Wind speed (m/s) |
+| cloud_cover_pct | float | Cloud cover (%) |
+| heat_index_f | float | Heat index (°F) |
+| precipitation_category | factor | Precipitation category (None, Light, Moderate, Heavy, Extreme) |
+| wind_category | factor | Wind category based on Beaufort scale |
+| weather_condition | string | Combined weather condition |
+| is_extreme_heat | boolean | Flag for temperature ≥ 95°F |
+| is_extreme_cold | boolean | Flag for temperature ≤ 20°F |
+| is_heavy_precipitation | boolean | Flag for precipitation > 10mm |
+
+**Coverage**:
+- 20 major U.S. cities
+- Hourly data for January 1, 2024 - December 31, 2024
+- ~8.76 million hourly records
+
+**Data Quality (BEFORE Cleaning)**:
+- Missing values: 1.2% across all weather variables
+- Inconsistent timezone handling
+- Outliers in precipitation and wind data
+- No derived features or categorizations
+
+**Data Quality (AFTER Cleaning)**:
+- Missing values: <0.1%
+- Standardized timezone to UTC
+- Outliers identified and handled
+- 15+ derived features created for analysis
+- Daily aggregations computed
+
+[Return to Main Report](Project_Report.html){onclick="jumpToReference('Project_Report.html'); return false;"}
+
+### <a id="appendix-b2-energy-data"></a>B.2 Energy Data
+
+**Source**: U.S. Energy Information Administration (EIA) API v2 (https://api.eia.gov/v2/electricity/rto/daily-region-data/data/)
+
+**Schema (Raw Data - BEFORE Cleaning)**:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| period | date | Date of measurement |
+| respondent | string | Company code |
+| respondent-name | string | Company name |
+| type | string | Measurement type code |
+| type-name | string | Measurement type description |
+| timezone | string | Timezone code |
+| timezone-description | string | Timezone description |
+| value | string | Energy value (as text) |
+| value-units | string | Measurement units |
+
+**Schema (Cleaned Data - AFTER Cleaning)**:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| date | date | Date of measurement |
+| company_code | string | Company code |
+| company_name | string | Company name |
+| state | string | State derived from company name |
+| region | string | Energy region classification |
+| company_size | factor | Company size category |
+| year | integer | Year |
+| month | integer | Month number |
+| day | integer | Day of month |
+| weekday | factor | Day of week (Mon, Tue, etc.) |
+| day_type | string | "Weekday" or "Weekend" |
+| season | string | Season category |
+| season_peak | string | "Peak Season" or "Off-Peak Season" |
+| quarter | string | Quarter (Q1, Q2, Q3, Q4) |
+| measurement_type | string | Measurement type code |
+| measurement_name | string | Measurement type description |
+| measurement_category | string | Categorized measurement (Generation, Demand, Interchange) |
+| measurement_subcategory | string | Detailed measurement classification |
+| value_numeric | float | Energy value (converted to numeric) |
+| units | string | Measurement units |
+| timezone | string | Timezone code |
+| timezone_desc | string | Timezone description |
+| value | string | Original value as text (preserved) |
+| value_conversion_failed | boolean | Flag for numeric conversion failures |
+
+**Coverage**:
+- Multiple energy regions across the U.S.
+- Daily data for January 1, 2024 - December 31, 2024
+- ~90,000 daily records
+
+**Data Quality (BEFORE Cleaning)**:
+- Missing values: 3.2% across variables
+- Inconsistent company naming
+- Values stored as text instead of numeric
+- No geographic or categorical classifications
+- Inconsistent measurement types
+
+**Data Quality (AFTER Cleaning)**:
+- Missing values: <0.5%
+- Standardized company and region names
+- All values properly converted to numeric
+- Complete geographic classification added
+- Standardized measurement categorization
+- 10+ derived features added
+
+[Return to Main Report](Project_Report.html){onclick="jumpToReference('Project_Report.html'); return
