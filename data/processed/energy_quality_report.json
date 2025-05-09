@@ -1,0 +1,8 @@
+{
+  "total_records": [182974],
+  "unique_companies": [75],
+  "unique_states": [12],
+  "date_range": ["2024-01-01 to 2024-12-31"],
+  "missing_values_pct": [2.763],
+  "outliers_detected": [3224]
+}

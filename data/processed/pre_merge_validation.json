@@ -1,0 +1,13 @@
+{
+  "date_executed": ["2025-05-06"],
+  "weather_dimensions": [175680, 27],
+  "energy_dimensions": [182974, 24],
+  "weather_date_range": [null, null],
+  "energy_date_range": ["2024-01-01", "2024-12-31"],
+  "temporal_overlap_days": [null],
+  "weather_locations": [20],
+  "energy_companies": [75],
+  "energy_states": [12],
+  "weather_missing_columns": [],
+  "energy_missing_columns": ["state"]
+}

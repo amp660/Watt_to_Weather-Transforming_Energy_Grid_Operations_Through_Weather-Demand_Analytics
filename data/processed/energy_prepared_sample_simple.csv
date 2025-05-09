@@ -1,0 +1,51 @@
+date,energy_region,energy_region_full_name,period,respondent-name,type,type-name,timezone,timezone-description,value,value-units
+2024-08-07,GRID,"Gridforce Energy Management, LLC",2024-08-07,"Gridforce Energy Management, LLC",TI,Total interchange,Eastern,Eastern,66622,megawatthours
+2024-03-29,SEPA,Southeastern Power Administration,2024-03-29,Southeastern Power Administration,NG,Net generation,Mountain,Mountain,7819,megawatthours
+2024-08-18,SOCO,"Southern Company Services, Inc. - Trans",2024-08-18,"Southern Company Services, Inc. - Trans",TI,Total interchange,Arizona,Arizona,49792,megawatthours
+2024-08-30,SOCO,"Southern Company Services, Inc. - Trans",2024-08-30,"Southern Company Services, Inc. - Trans",TI,Total interchange,Mountain,Mountain,60897,megawatthours
+2024-06-15,AECI,"Associated Electric Cooperative, Inc.",2024-06-15,"Associated Electric Cooperative, Inc.",DF,Day-ahead demand forecast,Pacific,Pacific,70186,megawatthours
+2024-12-19,GVL,Gainesville Regional Utilities,2024-12-19,Gainesville Regional Utilities,NG,Net generation,Eastern,Eastern,4121,megawatthours
+2024-01-06,FPL,Florida Power & Light Co.,2024-01-06,Florida Power & Light Co.,D,Demand,Central,Central,305520,megawatthours
+2024-10-17,GWA,"NaturEner Power Watch, LLC",2024-10-17,"NaturEner Power Watch, LLC",NG,Net generation,Pacific,Pacific,2341,megawatthours
+2024-06-05,GRID,"Gridforce Energy Management, LLC",2024-06-05,"Gridforce Energy Management, LLC",TI,Total interchange,Pacific,Pacific,23373,megawatthours
+2024-03-08,TEPC,Tucson Electric Power,2024-03-08,Tucson Electric Power,DF,Day-ahead demand forecast,Arizona,Arizona,33321,megawatthours
+2024-12-04,GVL,Gainesville Regional Utilities,2024-12-04,Gainesville Regional Utilities,TI,Total interchange,Eastern,Eastern,-742,megawatthours
+2024-02-17,PACW,PacifiCorp West,2024-02-17,PacifiCorp West,NG,Net generation,Mountain,Mountain,9784,megawatthours
+2024-04-11,AVA,Avista Corporation,2024-04-11,Avista Corporation,TI,Total interchange,Central,Central,-8305,megawatthours
+2024-01-12,US48,United States Lower 48,2024-01-12,United States Lower 48,TI,Total interchange,Mountain,Mountain,62661,megawatthours
+2024-12-15,HST,City of Homestead,2024-12-15,City of Homestead,D,Demand,Mountain,Mountain,1520,megawatthours
+2024-06-23,WALC,Western Area Power Administration - Desert Southwest Region,2024-06-23,Western Area Power Administration - Desert Southwest Region,NG,Net generation,Pacific,Pacific,33989,megawatthours
+2024-08-01,SRP,Salt River Project Agricultural Improvement and Power District,2024-08-01,Salt River Project Agricultural Improvement and Power District,NG,Net generation,Eastern,Eastern,207991,megawatthours
+2024-09-11,BPAT,Bonneville Power Administration,2024-09-11,Bonneville Power Administration,D,Demand,Mountain,Mountain,145270,megawatthours
+2024-08-16,IID,Imperial Irrigation District,2024-08-16,Imperial Irrigation District,DF,Day-ahead demand forecast,Mountain,Mountain,17130,megawatthours
+2024-11-28,ISNE,ISO New England,2024-11-28,ISO New England,NG,Net generation,Mountain,Mountain,281507,megawatthours
+2024-03-20,SPA,Southwestern Power Administration,2024-03-20,Southwestern Power Administration,D,Demand,Eastern,Eastern,477,megawatthours
+2024-04-08,IPCO,Idaho Power Company,2024-04-08,Idaho Power Company,TI,Total interchange,Eastern,Eastern,9528,megawatthours
+2024-11-28,WACM,Western Area Power Administration - Rocky Mountain Region,2024-11-28,Western Area Power Administration - Rocky Mountain Region,DF,Day-ahead demand forecast,Arizona,Arizona,79618,megawatthours
+2024-05-11,SCL,Seattle City Light,2024-05-11,Seattle City Light,D,Demand,Arizona,Arizona,21976,megawatthours
+2024-03-21,CENT,Central,2024-03-21,Central,DF,Day-ahead demand forecast,Pacific,Pacific,692691,megawatthours
+2024-06-26,CENT,Central,2024-06-26,Central,NG,Net generation,Central,Central,985064,megawatthours
+2024-08-13,CPLE,Duke Energy Progress East,2024-08-13,Duke Energy Progress East,DF,Day-ahead demand forecast,Eastern,Eastern,206657,megawatthours
+2024-04-30,AVA,Avista Corporation,2024-04-30,Avista Corporation,D,Demand,Mountain,Mountain,34803,megawatthours
+2024-04-28,MIDA,Mid-Atlantic,2024-04-28,Mid-Atlantic,TI,Total interchange,Eastern,Eastern,89623,megawatthours
+2024-08-01,GRID,"Gridforce Energy Management, LLC",2024-08-01,"Gridforce Energy Management, LLC",TI,Total interchange,Eastern,Eastern,66385,megawatthours
+2024-04-21,TIDC,Turlock Irrigation District,2024-04-21,Turlock Irrigation District,NG,Net generation,Mountain,Mountain,4248,megawatthours
+2024-04-10,CPLE,Duke Energy Progress East,2024-04-10,Duke Energy Progress East,D,Demand,Central,Central,138314,megawatthours
+2024-05-30,LDWP,Los Angeles Department of Water and Power,2024-05-30,Los Angeles Department of Water and Power,TI,Total interchange,Pacific,Pacific,-20242,megawatthours
+2024-03-01,BPAT,Bonneville Power Administration,2024-03-01,Bonneville Power Administration,D,Demand,Pacific,Pacific,188503,megawatthours
+2024-04-06,AZPS,Arizona Public Service Company,2024-04-06,Arizona Public Service Company,TI,Total interchange,Mountain,Mountain,-15313,megawatthours
+2024-10-11,ISNE,ISO New England,2024-10-11,ISO New England,DF,Day-ahead demand forecast,Central,Central,255790,megawatthours
+2024-06-18,WACM,Western Area Power Administration - Rocky Mountain Region,2024-06-18,Western Area Power Administration - Rocky Mountain Region,NG,Net generation,Central,Central,99003,megawatthours
+2024-08-13,CISO,California Independent System Operator,2024-08-13,California Independent System Operator,NG,Net generation,Pacific,Pacific,628268,megawatthours
+2024-12-17,JEA,JEA,2024-12-17,JEA,NG,Net generation,Arizona,Arizona,16598,megawatthours
+2024-01-25,HST,City of Homestead,2024-01-25,City of Homestead,D,Demand,Mountain,Mountain,1522,megawatthours
+2024-10-06,PACW,PacifiCorp West,2024-10-06,PacifiCorp West,TI,Total interchange,Eastern,Eastern,-41106,megawatthours
+2024-07-28,CPLW,Duke Energy Progress West,2024-07-28,Duke Energy Progress West,D,Demand,Central,Central,12867,megawatthours
+2024-11-28,BANC,Balancing Authority of Northern California,2024-11-28,Balancing Authority of Northern California,NG,Net generation,Mountain,Mountain,35293,megawatthours
+2024-10-04,WACM,Western Area Power Administration - Rocky Mountain Region,2024-10-04,Western Area Power Administration - Rocky Mountain Region,DF,Day-ahead demand forecast,Arizona,Arizona,70105,megawatthours
+2024-04-05,TPWR,"City of Tacoma, Department of Public Utilities, Light Division",2024-04-05,"City of Tacoma, Department of Public Utilities, Light Division",TI,Total interchange,Pacific,Pacific,-6859,megawatthours
+2024-02-24,TPWR,"City of Tacoma, Department of Public Utilities, Light Division",2024-02-24,"City of Tacoma, Department of Public Utilities, Light Division",TI,Total interchange,Central,Central,-8015,megawatthours
+2024-07-06,DOPD,PUD No. 1 of Douglas County,2024-07-06,PUD No. 1 of Douglas County,TI,Total interchange,Central,Central,5993,megawatthours
+2024-08-27,DUK,Duke Energy Carolinas,2024-08-27,Duke Energy Carolinas,NG,Net generation,Arizona,Arizona,358452,megawatthours
+2024-08-23,CPLW,Duke Energy Progress West,2024-08-23,Duke Energy Progress West,DF,Day-ahead demand forecast,Arizona,Arizona,12355,megawatthours
+2024-06-21,FPC,"Duke Energy Florida, Inc.",2024-06-21,"Duke Energy Florida, Inc.",D,Demand,Mountain,Mountain,189138,megawatthours

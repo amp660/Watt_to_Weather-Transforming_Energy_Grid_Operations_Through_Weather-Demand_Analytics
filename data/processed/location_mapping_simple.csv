@@ -1,0 +1,21 @@
+location,energy_region
+"Austin, TX",ERCO
+"Boston, MA",NYIS
+"Charlotte, NC",SERC
+"Chicago, IL",MISO
+"Columbus, OH",MISO
+"Dallas, TX",ERCO
+"Denver, CO",WACM
+"Fort Worth, TX",ERCO
+"Houston, TX",ERCO
+"Indianapolis, IN",MISO
+"Jacksonville, FL",FPL
+"Los Angeles, CA",CISO
+"New York, NY",NYIS
+"Philadelphia, PA",NYIS
+"Phoenix, AZ",SRP
+"San Antonio, TX",ERCO
+"San Diego, CA",CISO
+"San Francisco, CA",CISO
+"San Jose, CA",CISO
+"Seattle, WA",BPAT

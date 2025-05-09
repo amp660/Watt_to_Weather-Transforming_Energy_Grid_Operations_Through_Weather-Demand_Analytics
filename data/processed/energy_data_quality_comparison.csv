@@ -1,0 +1,8 @@
+Metric,Before,After
+Total Records,182974,182974
+Missing Values,0,121332
+Derived Features,0,6
+Categorical Variables,0,5
+Geographic Coverage,Limited,State and region mapping
+Value Validation,No validation,Numeric conversion with validation
+Temporal Features,Basic date only,"Year, month, day, weekday, season, quarter"

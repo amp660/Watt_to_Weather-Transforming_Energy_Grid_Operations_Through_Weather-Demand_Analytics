@@ -1,0 +1,10 @@
+{
+  "total_records": [182974],
+  "time_span": ["2024-01-01 to 2024-12-31"],
+  "states_covered": [12],
+  "regions_covered": [13],
+  "companies_covered": [75],
+  "measurement_types": [4],
+  "state_mapping_success_rate": [33.6889],
+  "missing_values_pct": [2.763]
+}

@@ -1,0 +1,8 @@
+{
+  "merge_date": "2025-05-06",
+  "merge_duration_seconds": 0.4099,
+  "merged_records": 53990,
+  "unique_locations": 19,
+  "unique_energy_regions": 8,
+  "date_range": ["2024-01-01", "2024-12-31"]
+}
