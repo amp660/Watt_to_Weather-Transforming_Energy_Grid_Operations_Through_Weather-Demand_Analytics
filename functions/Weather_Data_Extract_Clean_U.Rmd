@@ -1,0 +1,1194 @@
+r---
+title: "Weather Data Retrieval and Processing"
+output: html_document
+date: "2025-05-04"
+author: "Student Name"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Project Overview and Data Source Documentation
+This script retrieves, processes, and analyzes weather data from multiple U.S. cities using the Open-Meteo ERA5 historical weather API. The data will be merged with energy consumption data in subsequent analysis.
+
+API Documentation:
+Source: Open-Meteo ERA5 Historical Weather API (https://archive-api.open-meteo.com/v1/era5)
+Data Coverage: Hourly historical weather data
+
+Key Parameters:
+latitude, longitude: Geographic coordinates
+hourly: Weather variables to retrieve (temperature, humidity, precipitation, etc.)
+timezone: Timezone for datetime values
+Rate Limits: 10,000 API calls per day, 100 calls per minute
+Data Format: JSON response with hourly timeseries
+
+```{r}
+# PROJECT SETUP AND LIBRARIES
+#################################
+
+# Set seed for reproducibility
+set.seed(42)
+
+# Install required packages if needed (commented to avoid reinstallation)
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(
+  tidyverse,   # Data manipulation and visualization
+  httr,        # API requests
+  jsonlite,    # JSON parsing
+  lubridate,   # Date/time manipulation
+  readxl,      # Excel file handling
+  plotly,      # Interactive plots
+  DT,          # Interactive tables
+  corrplot,    # Correlation plots
+  skimr,       # Summary statistics
+  ggpubr,      # Publication-ready plots
+  scales,      # Scale formatting
+  viridis,     # Color palettes
+  patchwork,   # Combining plots
+  janitor,     # Data cleaning utilities
+  usethis,     # Development utilities and GitHub integration
+  digest       # For creating hash values
+)
+
+# Record package versions for reproducibility
+pkg_versions <- lapply(c(
+  "tidyverse", "httr", "jsonlite", "lubridate", "readxl", "plotly", 
+  "DT", "corrplot", "skimr", "ggpubr", "scales", "viridis", "patchwork", "janitor", "usethis", "digest"
+), pacman::p_version)
+
+# Convert the result to a named vector if needed
+pkg_versions <- unlist(pkg_versions)
+
+# Set working directory and create project structure
+dir.create("data", showWarnings = FALSE)
+dir.create("data/raw", showWarnings = FALSE)
+dir.create("data/processed", showWarnings = FALSE)
+dir.create("output", showWarnings = FALSE)
+dir.create("output/figures", showWarnings = FALSE)
+dir.create("data/backup", showWarnings = FALSE) # Dedicated backup directory
+dir.create("data/backup/raw_snapshots", showWarnings = FALSE)
+
+# GITHUB CONNECTION SETUP
+##################################################
+
+# Define your GitHub repository URL 
+github_repo_url <- "https://github.com/amp660/Data_Wrangling_Data_Backups"  # Replace with your actual GitHub repo URL
+github_connected <- FALSE  # Initialize connection status
+
+# Function to commit and push changes to GitHub
+commit_and_push_changes <- function(commit_message, files_to_add = ".", push = TRUE) {
+  tryCatch({
+    # Stage the specified files
+    cat(sprintf("Adding files to Git staging: %s\n", files_to_add))
+    system(paste0("git add ", files_to_add))
+    
+    # Create a commit with the provided message
+    commit_cmd <- paste0('git commit -m "', commit_message, '"')
+    commit_result <- system(commit_cmd, intern = TRUE)
+    cat("Changes committed to Git repository:\n")
+    cat(paste(commit_result, collapse = "\n"), "\n\n")
+    
+    # Push to GitHub if requested
+    if (push) {
+      cat("Pushing changes to GitHub repository...\n")
+      
+      # First try to pull any remote changes to avoid conflicts
+      cat("Checking for remote changes first...\n")
+      pull_result <- tryCatch({
+        system("git pull --rebase origin main", intern = TRUE)
+      }, error = function(e) {
+        cat("Warning: Could not pull from remote. Will try to force push.\n")
+        return(NULL)
+      })
+      
+      # Now push the changes
+      push_result <- tryCatch({
+        system("git push origin main", intern = TRUE)
+      }, error = function(e) {
+        # If regular push fails, try to resolve with a pull and merge
+        cat("Push failed. Attempting to resolve conflicts...\n")
+        system("git pull origin main --allow-unrelated-histories", intern = TRUE)
+        # Try pushing again after the merge
+        result <- system("git push origin main", intern = TRUE)
+        return(result)
+      })
+      
+      cat("Changes pushed to GitHub successfully!\n")
+      if (!is.null(push_result)) {
+        cat(paste(push_result, collapse = "\n"), "\n\n")
+      }
+    }
+    
+    return(TRUE)
+  }, error = function(e) {
+    cat("WARNING: Failed to commit or push changes to GitHub.\n")
+    cat("Error message:", e$message, "\n")
+    cat("You may need to manually resolve conflicts or force push:\n")
+    cat("git pull --allow-unrelated-histories origin main\n")
+    cat("git push -f origin main  # Use with caution, this will overwrite remote changes\n")
+    return(FALSE)
+  })
+}
+
+# Function to connect to GitHub repository
+connect_to_github <- function(repo_url) {
+  tryCatch({
+    # Check if git is installed
+    git_version <- system("git --version", intern = TRUE)
+    cat("Git detected:", git_version, "\n")
+    
+    # Initialize Git repository if not already done
+    if (!file.exists(".git")) {
+      cat("Initializing local Git repository...\n")
+      system("git init")
+      
+      # Create .gitignore file
+      writeLines(
+        c(
+          "# R specific files",
+          ".Rhistory",
+          ".RData",
+          ".Rproj.user/",
+          "*.Rproj",
+          "",
+          "# Large data files",
+          "data/raw/*.csv",
+          "data/raw/*.rds",
+          "data/backup/raw_snapshots/*.rds",
+          "",
+          "# Sensitive information",
+          "credentials.R",
+          "api_keys.txt",
+          "",
+          "# Temporary files",
+          "tmp/",
+          "temp/",
+          "*.tmp",
+          "",
+          "# System files",
+          ".DS_Store",
+          "Thumbs.db"
+        ),
+        ".gitignore"
+      )
+      cat("Created .gitignore file for managing tracked files.\n")
+    } else {
+      cat("Git repository already initialized.\n")
+    }
+    
+    # Check if remote is already configured
+    remote_exists <- tryCatch({
+      remote_check <- system("git remote -v", intern = TRUE)
+      grepl("origin", paste(remote_check, collapse = " "))
+    }, error = function(e) {
+      return(FALSE)
+    })
+    
+    if (!remote_exists) {
+      # Configure the remote repository
+      cat("Connecting to remote GitHub repository:", repo_url, "\n")
+      system(paste0("git remote add origin ", repo_url))
+      cat("Remote repository connected successfully.\n")
+      
+      # Configure basic Git settings if not already set
+      user_name <- system("git config user.name", intern = TRUE)
+      user_email <- system("git config user.email", intern = TRUE)
+      
+      if (length(user_name) == 0 || length(user_email) == 0) {
+        cat("\nGit user settings not configured. You should set them with:\n")
+        cat("git config --global user.name \"Your Name\"\n")
+        cat("git config --global user.email \"your.email@example.com\"\n\n")
+      }
+    } else {
+      # Remote already exists, get the URL
+      remote_url <- system("git remote get-url origin", intern = TRUE)
+      cat("GitHub repository already connected to:", remote_url, "\n")
+      
+      if (remote_url != repo_url) {
+        cat("NOTE: Current remote URL differs from specified URL.\n")
+        cat("To update the remote URL, use:\n")
+        cat(paste0("git remote set-url origin ", repo_url, "\n\n"))
+      }
+    }
+    
+    # Try to pull from remote first to integrate any existing remote content
+    tryCatch({
+      cat("Pulling any existing remote content...\n")
+      system("git pull origin main --allow-unrelated-histories", intern = TRUE)
+    }, error = function(e) {
+      cat("Note: Could not pull from remote. This is normal for new repositories.\n")
+    })
+    
+    # Instructions for pushing to GitHub
+    cat("\nTo push your changes to GitHub, use these commands:\n")
+    cat("1. Add files to staging: git add .\n")
+    cat("2. Commit changes: git commit -m \"Your commit message\"\n")
+    cat("3. Push to GitHub: git push -u origin main\n\n")
+    
+    # Create initial commit if repository is new
+    commit_history <- tryCatch({
+      system("git log -1", intern = TRUE)
+      TRUE
+    }, error = function(e) {
+      FALSE
+    })
+    
+    if (!commit_history) {
+      cat("Creating initial commit to prepare for pushing to GitHub...\n")
+      system("git add README.md .gitignore")
+      system('git commit -m "Initial commit with project structure"')
+      cat("Initial commit created. Ready to push to GitHub.\n")
+      
+      # Try to push the initial commit
+      tryCatch({
+        system("git push -u origin main")
+        cat("Initial commit pushed to GitHub.\n")
+      }, error = function(e) {
+        cat("Could not push initial commit. You may need to do this manually.\n")
+      })
+    }
+    
+    return(TRUE)
+  }, error = function(e) {
+    cat("ERROR: Failed to connect to GitHub repository.\n")
+    cat("Error message:", e$message, "\n")
+    cat("Please ensure Git is installed and you have the necessary permissions.\n")
+    return(FALSE)
+  })
+}
+
+# Function to create timestamped backup of raw data and optionally commit to GitHub
+create_raw_data_backup <- function(data, prefix = "weather_data", commit_to_git = TRUE) {
+  # Create a timestamped filename
+  timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+  backup_filename <- paste0("data/backup/raw_snapshots/", prefix, "_", timestamp, ".rds")
+  
+  # Save the full data to local backup
+  saveRDS(data, file = backup_filename)
+  
+  # Create a smaller version of the data for Git tracking (summary statistics)
+  if (commit_to_git && github_connected && nrow(data) > 0) {
+    # Create a summary file that's small enough to track in Git
+    data_summary <- data %>%
+      summarise(
+        records = n(),
+        timestamp = Sys.time(),
+        columns = ncol(.),
+        missing_values = sum(is.na(.)),
+        data_hash = digest::digest(., algo = "md5")
+      )
+    
+    # Save summary to a tracked location
+    summary_filename <- paste0("data/processed/", prefix, "_summary.csv")
+    write_csv(data_summary, summary_filename)
+    
+    # Commit the change with appropriate message
+    commit_message <- sprintf("Updated %s - %d records on %s", 
+                             prefix, nrow(data), Sys.Date())
+    commit_and_push_changes(commit_message, files_to_add = summary_filename)
+  }
+  
+  return(backup_filename)
+}
+
+# Connect to GitHub repository
+github_connected <- connect_to_github(github_repo_url)
+
+if (github_connected) {
+  cat("GitHub repository setup completed successfully.\n")
+  
+  # Add a note to the README about GitHub repository
+  if (file.exists("README.md")) {
+    readme_content <- readLines("README.md")
+    if (!any(grepl("GitHub Repository", readme_content))) {
+      github_info <- c(
+        "",
+        "## GitHub Repository",
+        paste0("This project is version controlled using Git and hosted on GitHub at: ", github_repo_url),
+        "To contribute or download the latest version, please visit the repository.",
+        ""
+      )
+      writeLines(c(readme_content, github_info), "README.md")
+      cat("README.md updated with GitHub repository information.\n")
+    }
+  }
+}
+
+# Create README file with project documentation
+if (!file.exists("README.md")) {
+  readme_content <- c(
+    "# Weather Data Retrieval and Processing Project",
+    "",
+    "## Overview",
+    "This project retrieves, processes, and analyzes weather data from multiple U.S. cities using the Open-Meteo ERA5 historical weather API.",
+    "",
+    "## Data Sources",
+    "- Open-Meteo ERA5 Historical Weather API (https://archive-api.open-meteo.com/v1/era5)",
+    "- Hourly historical weather data for 20 major U.S. cities",
+    "",
+    "## Directory Structure",
+    "- `data/raw/`: Raw data retrieved from API",
+    "- `data/processed/`: Cleaned and transformed data",
+    "- `data/backup/`: Backups of raw datasets at different stages",
+    "- `output/figures/`: Generated visualizations",
+    "",
+    "## Version Control",
+    "This project uses Git for version control with regular commits after significant changes.",
+    "Large data files are stored separately and backed up to cloud storage.",
+    "",
+    sprintf("## Last Updated: %s", Sys.Date())
+  )
+  writeLines(readme_content, "README.md")
+  cat("Created README.md file with project documentation.\n")
+  
+  # Commit the README if GitHub is connected
+  if (github_connected) {
+    commit_and_push_changes("Initial README with project documentation", "README.md")
+  }
+}
+
+# DEFINE DATE RANGE FOR THE PROJECT
+start_date <- "2024-01-01"
+end_date <- "2024-12-31"
+```
+
+Data Retrieval Functions
+The following functions handle the retrieval of weather data from the Open-Meteo API, with error handling and retry logic.
+
+```{r}
+# DATA RETRIEVAL - WEATHER DATA (Multiple Locations)
+####################################################
+
+# Close any open connections first
+closeAllConnections()
+
+# Function to fetch weather data for a single location with retry logic
+fetch_weather_for_location <- function(latitude, longitude, location_name, start_date, end_date, 
+                                      max_retries = 3, retry_delay = 2) {
+  base_url <- "https://archive-api.open-meteo.com/v1/era5"
+  
+  # Set up retry loop
+  retries <- 0
+  while (retries <= max_retries) {
+    tryCatch({
+      # Build request parameters
+      query_params <- list(
+        latitude = latitude,
+        longitude = longitude,
+        start_date = start_date,
+        end_date = end_date,
+        hourly = "temperature_2m,relative_humidity_2m,precipitation,windspeed_10m,cloudcover",
+        timezone = "auto"  # Let the API determine timezone based on coordinates
+      )
+      
+      # Make the API request
+      response <- GET(
+        base_url,
+        query = query_params
+      )
+      
+      # Check for successful API response
+      if (status_code(response) != 200) {
+        warning(paste("API request failed for", location_name, "with status:", status_code(response)))
+        if (retries < max_retries) {
+          retries <- retries + 1
+          cat(sprintf("Retry attempt %d for %s after %d seconds...\n", 
+                      retries, location_name, retry_delay))
+          Sys.sleep(retry_delay)
+          next
+        } else {
+          warning("Maximum retries reached. Skipping location.")
+          return(NULL)
+        }
+      }
+      
+      # Parse response data
+      raw_content <- content(response, "text", encoding = "UTF-8")
+      
+      # Store raw data backup before processing
+      backup_file <- paste0("data/backup/weather_raw_", 
+                           gsub("[^A-Za-z]", "", location_name), 
+                           format(Sys.time(), "_%Y%m%d_%H%M%S"), 
+                           ".json")
+      write(raw_content, file = backup_file)
+      
+      # Parse JSON
+      data <- fromJSON(raw_content)
+      
+      # Extract hourly data
+      hourly_data <- data$hourly
+      
+      # Create tibble with clean column names
+      weather_hourly <- tibble(
+        location = location_name,
+        latitude = latitude,
+        longitude = longitude,
+        datetime = as.POSIXct(hourly_data$time, format = "%Y-%m-%dT%H:%M"),
+        temperature = hourly_data$temperature_2m,
+        humidity = hourly_data$relative_humidity_2m,
+        precipitation = hourly_data$precipitation,
+        wind_speed = hourly_data$windspeed_10m,
+        cloud_cover = hourly_data$cloudcover
+      )
+      
+      # Initial data quality check
+      cat(sprintf("Data retrieved for %s: %d records\n", location_name, nrow(weather_hourly)))
+      cat(sprintf("Date range: %s to %s\n", 
+                  min(weather_hourly$datetime), max(weather_hourly$datetime)))
+      cat(sprintf("Missing values: %d\n", 
+                  sum(is.na(weather_hourly))))
+      
+      return(weather_hourly)
+      
+    }, error = function(e) {
+      warning(paste("Error processing data for", location_name, ":", e$message))
+      if (retries < max_retries) {
+        retries <<- retries + 1
+        cat(sprintf("Retry attempt %d for %s after %d seconds...\n", 
+                    retries, location_name, retry_delay))
+        Sys.sleep(retry_delay)
+      } else {
+        warning("Maximum retries reached. Skipping location.")
+        return(NULL)
+      }
+    })
+  }
+  return(NULL)  # If all retries fail
+}
+
+# Define multiple US locations
+us_locations <- tibble(
+  location = c("New York, NY", "Los Angeles, CA", "Chicago, IL", "Houston, TX", 
+               "Phoenix, AZ", "Philadelphia, PA", "San Antonio, TX", "San Diego, CA",
+               "Dallas, TX", "San Jose, CA", "Austin, TX", "Jacksonville, FL",
+               "Fort Worth, TX", "Columbus, OH", "San Francisco, CA", "Charlotte, NC",
+               "Indianapolis, IN", "Seattle, WA", "Denver, CO", "Boston, MA"),
+  latitude = c(40.7128, 34.0522, 41.8781, 29.7604, 33.4484, 39.9526, 29.4241, 32.7157,
+              32.7767, 37.3382, 30.2672, 30.3322, 32.7555, 39.9612, 37.7749, 35.2271,
+              39.7684, 47.6062, 39.7392, 42.3601),
+  longitude = c(-74.0060, -118.2437, -87.6298, -95.3698, -112.0740, -75.1652, -98.4936, -117.1611,
+               -96.7970, -121.8863, -97.7431, -81.6557, -97.3308, -82.9988, -122.4194, -80.8431,
+               -86.1581, -122.3321, -104.9903, -71.0589)
+)
+
+# Create a metadata file for the locations
+write_csv(us_locations, "data/raw/us_locations_metadata.csv")
+
+# If GitHub is connected, commit the metadata file
+if (github_connected) {
+  commit_and_push_changes("Added US locations metadata", "data/raw/us_locations_metadata.csv")
+}
+
+# Fetch weather data for all locations
+weather_all_locations <- map_df(1:nrow(us_locations), function(i) {
+  cat(sprintf("Fetching weather data for %s...\n", us_locations$location[i]))
+  
+  weather_data <- fetch_weather_for_location(
+    latitude = us_locations$latitude[i],
+    longitude = us_locations$longitude[i],
+    location_name = us_locations$location[i],
+    start_date = start_date,
+    end_date = end_date
+  )
+  
+  # Add a small delay to avoid hitting API rate limits
+  Sys.sleep(1)
+  
+  return(weather_data)
+})
+
+# Save raw weather data
+if (nrow(weather_all_locations) > 0) {
+  # Save in both RDS and CSV format for flexibility
+  saveRDS(weather_all_locations, "data/raw/weather_raw_all_locations.rds")
+  write_csv(weather_all_locations, "data/raw/weather_raw_all_locations.csv")
+  
+  # Create backup of the raw dataset
+  weather_all_locations_backup_file <- create_raw_data_backup(weather_all_locations, "weather_all_locations")
+  cat(sprintf("Raw data backed up to: %s\n", weather_all_locations_backup_file))
+  
+  # Create a data summary file for GitHub tracking
+  if (github_connected) {
+    # Create a small sample for GitHub tracking
+    set.seed(42)  # Ensure reproducible sampling
+    weather_sample <- weather_all_locations %>%
+      group_by(location) %>%
+      sample_n(min(10, n())) %>%  # 10 records per location or fewer if not available
+      ungroup()
+    
+    # Save sample data file
+    write_csv(weather_sample, "data/processed/weather_all_locations_sample.csv")
+    
+    # Commit and push the sample data file
+    commit_and_push_changes("Initial data retrieval completed - raw weather data for 20 US cities", 
+                          files_to_add = "data/processed/weather_all_locations_sample.csv")
+  }
+  
+  cat(sprintf("\nSuccessfully retrieved weather data: %d total records\n", nrow(weather_all_locations)))
+  
+  # Summary by location
+  location_summary <- weather_all_locations %>%
+    group_by(location) %>%
+    summarise(
+      records = n(),
+      start_date = min(datetime),
+      end_date = max(datetime),
+      avg_temp = mean(temperature, na.rm = TRUE),
+      missing_values = sum(is.na(temperature) | is.na(humidity) | 
+                          is.na(precipitation) | is.na(wind_speed) | 
+                          is.na(cloud_cover))
+    )
+  
+  # Save and commit location summary
+  write_csv(location_summary, "data/processed/location_summary.csv")
+  
+  if (github_connected) {
+    commit_and_push_changes("Added location summary statistics", files_to_add = "data/processed/location_summary.csv")
+  }
+  
+  print(location_summary)
+}
+```
+
+
+Data Quality Assessment - Pre-Cleaning
+
+```{r}
+# Pre-cleaning data quality assessment
+weather_all_locations %>%
+  skimr::skim() %>%
+  knitr::kable(caption = "Pre-cleaning Data Quality Summary")
+
+# Distribution of values before cleaning
+weather_quality_plot <- weather_all_locations %>%
+  pivot_longer(cols = c(temperature, humidity, precipitation, wind_speed, cloud_cover),
+               names_to = "variable", values_to = "value") %>%
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = 30, fill = "steelblue", alpha = 0.7) +
+  facet_wrap(~ variable, scales = "free") +
+  theme_minimal() +
+  labs(
+    title = "Distribution of Weather Variables Before Cleaning",
+    subtitle = "Raw data from Open-Meteo API",
+    x = "Value",
+    y = "Count"
+  )
+
+print(weather_quality_plot)
+
+# Save plot to file
+ggsave("output/figures/pre_cleaning_distribution.png", weather_quality_plot, width = 10, height = 6, dpi = 300)
+
+# Commit the plot to GitHub if connected
+if (github_connected) {
+  commit_and_push_changes("Added pre-cleaning data distribution plot", 
+                         "output/figures/pre_cleaning_distribution.png")
+}
+```
+
+Data Cleaning and Transformation
+
+```{r}
+# DATA CLEANING AND ENRICHMENT - WEATHER DATA
+##################################################
+
+# Load the raw weather data (if not already in memory)
+if(!exists("weather_all_locations")) {
+  weather_raw <- readRDS("data/raw/weather_raw_all_locations.rds")
+} else {
+  weather_raw <- weather_all_locations
+}
+
+# Create backup of raw data before cleaning
+raw_data_backup_file <- create_raw_data_backup(weather_raw, "weather_raw_before_cleaning")
+cat(sprintf("Raw data backed up before cleaning: %s\n", raw_data_backup_file))
+
+# Clean and transform weather data
+weather_clean <- weather_raw %>%
+  # Remove exact duplicate rows if any
+  # Explanation: Duplicates can occur from API responses and create bias in analysis
+  distinct() %>%
+  
+  # Rename columns for clarity and consistency
+  # Explanation: Clear, descriptive column names improve code readability and documentation
+  rename(
+    location_name = location,
+    latitude_deg = latitude,
+    longitude_deg = longitude,
+    datetime_utc = datetime,
+    temperature_c = temperature,
+    humidity_pct = humidity,
+    precipitation_mm = precipitation,
+    wind_speed_mps = wind_speed,
+    cloud_cover_pct = cloud_cover
+  ) %>%
+  
+  # Add time-based features
+  # Explanation: Time components enable temporal analysis and seasonality detection
+  mutate(
+    # Extract date components
+    date = as.Date(datetime_utc),
+    year = year(datetime_utc),
+    month = month(datetime_utc),
+    day = day(datetime_utc),
+    hour = hour(datetime_utc),
+    weekday = wday(datetime_utc, label = TRUE, abbr = TRUE),
+    
+    # Create season
+    # Explanation: Seasons are key for understanding weather patterns
+    season = case_when(
+      month %in% c(12, 1, 2) ~ "Winter",
+      month %in% c(3, 4, 5) ~ "Spring",
+      month %in% c(6, 7, 8) ~ "Summer",
+      month %in% c(9, 10, 11) ~ "Fall"
+    ),
+    
+    # Create time of day
+    # Explanation: Daily patterns important for energy consumption analysis
+    time_of_day = case_when(
+      hour >= 5 & hour < 12 ~ "Morning",
+      hour >= 12 & hour < 17 ~ "Afternoon",
+      hour >= 17 & hour < 21 ~ "Evening",
+      TRUE ~ "Night"
+    ),
+    
+    # Extract state from location
+    # Explanation: State-level analysis will be important for energy region mapping
+    state = str_extract(location_name, "[A-Z]{2}$"),
+    city = str_remove(location_name, ",\\s*[A-Z]{2}$")
+  ) %>%
+  
+  # Add calculated weather variables
+  # Explanation: Derived features capture important weather phenomena not in raw data
+  mutate(
+    # Convert temperature to Fahrenheit
+    # Explanation: Standard unit in US, needed for US-based analysis
+    temperature_f = temperature_c * 9/5 + 32,
+    
+    # Calculate heat index (simplified formula for F)
+    # Explanation: Heat index affects energy consumption for cooling
+    heat_index_f = case_when(
+      temperature_f < 80 ~ temperature_f,
+      TRUE ~ -42.379 + 2.04901523 * temperature_f + 10.14333127 * humidity_pct - 
+             0.22475541 * temperature_f * humidity_pct - 0.00683783 * temperature_f^2 - 
+             0.05481717 * humidity_pct^2 + 0.00122874 * temperature_f^2 * humidity_pct + 
+             0.00085282 * temperature_f * humidity_pct^2 - 0.00000199 * temperature_f^2 * humidity_pct^2
+    ),
+    
+    # Categorize precipitation
+    # Explanation: Categorical variables aid in threshold analysis and visualization
+    precipitation_category = case_when(
+      precipitation_mm == 0 ~ "None",
+      precipitation_mm < 2.5 ~ "Light",
+      precipitation_mm < 7.6 ~ "Moderate",
+      precipitation_mm < 50 ~ "Heavy",
+      TRUE ~ "Extreme"
+    ),
+    
+    # Categorize wind speed (Beaufort scale)
+    # Explanation: Standard meteorological classification for interpretation
+    wind_category = case_when(
+      wind_speed_mps < 0.5 ~ "Calm",
+      wind_speed_mps < 1.6 ~ "Light Air",
+      wind_speed_mps < 3.4 ~ "Light Breeze",
+      wind_speed_mps < 5.5 ~ "Gentle Breeze",
+      wind_speed_mps < 8.0 ~ "Moderate Breeze",
+      wind_speed_mps < 10.8 ~ "Fresh Breeze",
+      wind_speed_mps < 13.9 ~ "Strong Breeze",
+      wind_speed_mps < 17.2 ~ "High Wind",
+      wind_speed_mps < 20.8 ~ "Gale",
+      wind_speed_mps < 24.5 ~ "Strong Gale",
+      wind_speed_mps < 28.5 ~ "Storm",
+      wind_speed_mps < 32.7 ~ "Violent Storm",
+      TRUE ~ "Hurricane"
+    ),
+    
+    # Create a combined weather condition
+    # Explanation: Simplified weather state for high-level analysis
+    weather_condition = case_when(
+      precipitation_mm > 0 & temperature_c <= 0 ~ "Snow/Freezing Rain",
+      precipitation_mm > 0 ~ "Rain",
+      cloud_cover_pct >= 80 ~ "Overcast",
+      cloud_cover_pct >= 40 ~ "Partly Cloudy",
+      TRUE ~ "Clear"
+    ),
+    
+    # Add extreme weather flags
+    # Explanation: Extreme weather events strongly impact energy usage
+    is_extreme_heat = temperature_f >= 95,
+    is_extreme_cold = temperature_f <= 20,
+    is_heavy_precipitation = precipitation_mm >= 10
+  ) %>%
+  
+  # Reorder columns for better organization
+  select(
+    # Location information
+    location_name, city, state, latitude_deg, longitude_deg,
+    
+    # Time information
+    datetime_utc, date, year, month, day, hour, weekday, season, time_of_day,
+    
+    # Weather measurements
+    temperature_c, temperature_f, humidity_pct, precipitation_mm, 
+    wind_speed_mps, cloud_cover_pct, heat_index_f,
+    
+    # Categorical variables
+    precipitation_category, wind_category, weather_condition,
+    
+    # Extreme weather flags
+    is_extreme_heat, is_extreme_cold, is_heavy_precipitation
+  )
+
+# Backup cleaned data
+cleaned_data_backup_file <- create_raw_data_backup(weather_clean, "weather_clean")
+cat(sprintf("Cleaned data backed up: %s\n", cleaned_data_backup_file))
+
+# Check for missing values and outliers
+weather_missing <- weather_clean %>%
+  summarise(across(everything(), ~sum(is.na(.))))
+
+# Create outlier check function
+identify_outliers <- function(x, threshold = 3) {
+  if(!is.numeric(x)) return(NA)
+  
+  mu <- mean(x, na.rm = TRUE)
+  sigma <- sd(x, na.rm = TRUE)
+  
+  # Z-score based outlier detection
+  outliers <- which(abs(x - mu) > threshold * sigma)
+  return(length(outliers))
+}
+
+# Apply outlier detection
+weather_outliers <- weather_clean %>%
+  summarise(across(where(is.numeric), ~identify_outliers(.)))
+
+# Report data quality metrics
+cat("Missing values in weather data:\n")
+print(weather_missing)
+
+cat("\nPotential outliers in weather data (z-score > 3):\n")
+print(weather_outliers)
+
+# Save cleaned weather data
+saveRDS(weather_clean, "data/processed/weather_clean.rds")
+write_csv(weather_clean, "data/processed/weather_clean.csv")
+
+# Create a smaller tracked version for GitHub
+weather_clean_sample <- weather_clean %>%
+  group_by(location_name, date) %>%
+  summarise(
+    avg_temp_f = mean(temperature_f, na.rm = TRUE),
+    avg_humidity = mean(humidity_pct, na.rm = TRUE),
+    total_precip = sum(precipitation_mm, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  head(100)  # Keep only a small sample for GitHub tracking
+
+# Save the sample file for GitHub tracking
+write_csv(weather_clean_sample, "data/processed/weather_clean_sample.csv")
+
+# Commit the changes to GitHub
+if (github_connected) {
+  commit_and_push_changes(
+    commit_message = sprintf("Data cleaning completed on %s - %d records processed", 
+                            Sys.Date(), nrow(weather_clean)),
+    files_to_add = "data/processed/weather_clean_sample.csv README.md"
+  )
+}
+
+# Create summary statistics
+weather_summary <- weather_clean %>%
+  group_by(location_name, state) %>%
+  summarise(
+    records = n(),
+    avg_temp_f = mean(temperature_f, na.rm = TRUE),
+    max_temp_f = max(temperature_f, na.rm = TRUE),
+    min_temp_f = min(temperature_f, na.rm = TRUE),
+    total_precip_mm = sum(precipitation_mm, na.rm = TRUE),
+    avg_humidity = mean(humidity_pct, na.rm = TRUE),
+    avg_wind_speed = mean(wind_speed_mps, na.rm = TRUE),
+    extreme_heat_days = sum(is_extreme_heat, na.rm = TRUE) / 24,  # Convert hours to days
+    extreme_cold_days = sum(is_extreme_cold, na.rm = TRUE) / 24,  # Convert hours to days
+    .groups = 'drop'
+  ) %>%
+  arrange(desc(avg_temp_f))
+
+# Save and commit summary statistics
+write_csv(weather_summary, "data/processed/weather_summary_by_location.csv")
+if (github_connected) {
+  commit_and_push_changes("Added weather summary statistics by location", 
+                         "data/processed/weather_summary_by_location.csv")
+}
+
+print("Weather summary by location:")
+print(weather_summary)
+```
+
+Data Quality Assessment - Post-Cleaning
+
+```{r}
+# Post-cleaning data quality assessment
+weather_clean %>%
+  skimr::skim() %>%
+  knitr::kable(caption = "Post-cleaning Data Quality Summary")
+
+# Compare data quality before and after cleaning
+quality_comparison <- data.frame(
+  Metric = c("Total Records", "Missing Values", "Derived Features", "Categorized Variables"),
+  Before = c(
+    nrow(weather_raw),
+    sum(is.na(weather_raw)),
+    0,  # No derived features in raw data
+    0   # No categorized variables in raw data
+  ),
+  After = c(
+    nrow(weather_clean),
+    sum(is.na(weather_clean)),
+    3,  # temperature_f, heat_index_f, and extreme weather flags
+    3   # precipitation_category, wind_category, weather_condition
+  )
+)
+
+knitr::kable(quality_comparison, caption = "Data Quality Improvement Summary")
+
+# Save quality comparison for GitHub tracking
+write_csv(quality_comparison, "data/processed/data_quality_comparison.csv")
+if (github_connected) {
+  commit_and_push_changes("Added data quality comparison metrics", 
+                         "data/processed/data_quality_comparison.csv")
+}
+```
+
+Creating Daily Weather Aggregates
+
+```{r}
+# Create daily weather aggregates
+weather_daily <- weather_clean %>%
+  group_by(location_name, city, state, date = as.Date(datetime_utc)) %>%
+  summarise(
+    latitude_deg = first(latitude_deg),
+    longitude_deg = first(longitude_deg),
+    
+    # Temperature statistics
+    avg_temp_f = mean(temperature_f, na.rm = TRUE),
+    max_temp_f = max(temperature_f, na.rm = TRUE),
+    min_temp_f = min(temperature_f, na.rm = TRUE),
+    avg_temp_c = mean(temperature_c, na.rm = TRUE),
+    max_temp_c = max(temperature_c, na.rm = TRUE),
+    min_temp_c = min(temperature_c, na.rm = TRUE),
+    temp_range_f = max_temp_f - min_temp_f,  # Daily temperature variation
+    
+    # Other weather metrics
+    avg_humidity = mean(humidity_pct, na.rm = TRUE),
+    total_precip = sum(precipitation_mm, na.rm = TRUE),
+    avg_wind_speed = mean(wind_speed_mps, na.rm = TRUE),
+    max_wind_speed = max(wind_speed_mps, na.rm = TRUE),
+    avg_cloud_cover = mean(cloud_cover_pct, na.rm = TRUE),
+    
+    # Extreme weather indicators
+    had_rain = as.integer(any(precipitation_mm > 0)),
+    had_heavy_rain = as.integer(any(precipitation_mm > 7.6)),
+    had_high_temp = as.integer(any(temperature_f >= 90)),
+    had_low_temp = as.integer(any(temperature_f <= 32)),
+    had_high_wind = as.integer(any(wind_speed_mps >= 10.8)),
+    
+    # Thermal comfort metrics (important for energy demand)
+    avg_heat_index_f = mean(heat_index_f, na.rm = TRUE),
+    max_heat_index_f = max(heat_index_f, na.rm = TRUE),
+    hours_over_80f = sum(temperature_f > 80, na.rm = TRUE),
+    hours_under_40f = sum(temperature_f < 40, na.rm = TRUE),
+    
+    .groups = 'drop'
+  ) %>%
+  # Add additional time-based features
+  mutate(
+    year = year(date),
+    month = month(date),
+    day = day(date),
+    weekday = wday(date, label = TRUE, abbr = TRUE),
+    
+    # Recreate season for the daily data
+    season = case_when(
+      month %in% c(12, 1, 2) ~ "Winter",
+      month %in% c(3, 4, 5) ~ "Spring",
+      month %in% c(6, 7, 8) ~ "Summer",
+      month %in% c(9, 10, 11) ~ "Fall"
+    ),
+    
+    # Add weather day type classification (useful for energy analysis)
+    weather_day_type = case_when(
+      had_high_temp == 1 & avg_humidity > 70 ~ "Hot and Humid",
+      had_high_temp == 1 ~ "Hot",
+      had_low_temp == 1 ~ "Cold",
+      total_precip > 10 ~ "Rainy",
+      avg_cloud_cover > 80 ~ "Cloudy",
+      TRUE ~ "Moderate"
+    )
+  )
+
+# Create backup of daily aggregated data
+daily_data_backup_file <- create_raw_data_backup(weather_daily, "weather_daily")
+cat(sprintf("Daily weather data backed up: %s\n", daily_data_backup_file))
+
+# Validate daily aggregation
+daily_validation <- weather_daily %>%
+  group_by(location_name) %>%
+  summarise(
+    days = n(),
+    expected_days = as.numeric(difftime(as.Date(end_date), as.Date(start_date), units = "days")) + 1,
+    completeness = days / expected_days,
+    .groups = 'drop'
+  )
+
+print("Daily data validation:")
+print(daily_validation)
+
+# Save the daily weather data
+saveRDS(weather_daily, "data/processed/weather_daily.rds")
+write_csv(weather_daily, "data/processed/weather_daily.csv")
+
+# Create a smaller sample of daily data for GitHub tracking
+weather_daily_sample <- weather_daily %>%
+  sample_n(min(100, nrow(.)))  # Use either 100 rows or all rows if fewer than 100
+
+# Save the sample file for GitHub tracking
+write_csv(weather_daily_sample, "data/processed/weather_daily_sample.csv")
+
+# Commit the daily data to GitHub
+if (github_connected) {
+  commit_and_push_changes(
+    commit_message = sprintf("Daily weather aggregation completed - %d days of data", nrow(weather_daily)),
+    files_to_add = "data/processed/weather_daily_sample.csv"
+  )
+}
+
+# Check the structure
+cat("Weather daily data structure:\n")
+str(weather_daily)
+cat(sprintf("\nTotal records in weather_daily: %d\n", nrow(weather_daily)))
+cat(sprintf("Date range: %s to %s\n", min(weather_daily$date), max(weather_daily$date)))
+cat(sprintf("Number of locations: %d\n", n_distinct(weather_daily$location_name)))
+
+# Create summary statistics for daily data
+daily_summary <- weather_daily %>%
+  group_by(season) %>%
+  summarise(
+    avg_temp_f = mean(avg_temp_f, na.rm = TRUE),
+    avg_daily_range = mean(temp_range_f, na.rm = TRUE),
+    avg_precip = mean(total_precip, na.rm = TRUE),
+    rainy_days_pct = mean(had_rain) * 100,
+    extreme_temp_days_pct = mean(had_high_temp | had_low_temp) * 100,
+    .groups = 'drop'
+  )
+
+# Save daily summary to CSV and commit
+write_csv(daily_summary, "data/processed/weather_daily_summary_by_season.csv")
+if (github_connected) {
+  commit_and_push_changes("Added daily weather summary by season", 
+                         "data/processed/weather_daily_summary_by_season.csv")
+}
+
+print("Daily weather summary by season:")
+print(daily_summary)
+```
+
+Exploratory Data Analysis
+
+```{r}
+# Load required packages for advanced visualizations
+library(tidyverse)
+library(lubridate)
+library(viridis)
+library(patchwork)
+library(plotly)
+library(sf)
+library(maps)
+library(ggridges)
+library(ggpubr)
+
+# Create Summary Statistics
+##################################################
+
+# Overall weather statistics by location
+weather_stats <- weather_clean %>%
+  group_by(city, state, latitude_deg, longitude_deg) %>%
+  summarise(
+    observations = n(),
+    avg_temp_f = mean(temperature_f, na.rm = TRUE),
+    max_temp_f = max(temperature_f, na.rm = TRUE),
+    min_temp_f = min(temperature_f, na.rm = TRUE),
+    temp_range_f = max_temp_f - min_temp_f,
+    avg_humidity = mean(humidity_pct, na.rm = TRUE),
+    total_precip_inches = sum(precipitation_mm * 0.0393701, na.rm = TRUE),
+    avg_wind_mph = mean(wind_speed_mps * 2.23694, na.rm = TRUE),
+    days_with_rain = sum(precipitation_mm > 0) / 24,  # Convert hours to days
+    days_with_heavy_rain = sum(precipitation_mm > 7.6) / 24,
+    .groups = 'drop'
+  ) %>%
+  arrange(desc(avg_temp_f))
+
+# Save weather stats to CSV
+write_csv(weather_stats, "data/processed/city_weather_stats.csv")
+if (github_connected) {
+  commit_and_push_changes("Added city weather statistics", "data/processed/city_weather_stats.csv")
+}
+
+print("Weather Statistics by City:")
+print(weather_stats)
+
+# Temperature Analysis
+##################################################
+
+# Create temperature heatmap visualization
+temp_heatmap <- weather_daily %>%
+  group_by(city, month = month(date, label = TRUE, abbr = TRUE)) %>%
+  summarise(avg_temp = mean(avg_temp_f, na.rm = TRUE), .groups = 'drop') %>%
+  ggplot(aes(x = month, y = reorder(city, avg_temp), fill = avg_temp)) +
+  geom_tile(color = "white", size = 0.3) +
+  scale_fill_viridis(name = "Temperature (°F)", option = "plasma") +
+  labs(
+    title = "Average Monthly Temperature by City",
+    subtitle = "US Cities in 2024",
+    x = "Month",
+    y = "City",
+    caption = "Data source: Open-Meteo ERA5 Historical Weather API"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 8),
+    legend.position = "right",
+    plot.caption = element_text(size = 8, color = "gray50")
+  )
+
+# Display the plot
+print(temp_heatmap)
+
+# Save the plot
+ggsave("output/figures/temperature_heatmap.png", temp_heatmap, width = 12, height = 8, dpi = 300)
+if (github_connected) {
+  commit_and_push_changes("Added temperature heatmap visualization", 
+                        "output/figures/temperature_heatmap.png")
+}
+
+# Temperature distribution by season
+temp_distribution <- weather_clean %>%
+  ggplot(aes(x = temperature_f, y = season, fill = stat(x))) +
+  geom_density_ridges_gradient(scale = 3, rel_min_height = 0.01) +
+  scale_fill_viridis(name = "Temperature (°F)", option = "plasma") +
+  labs(
+    title = "Temperature Distribution by Season",
+    subtitle = "All US Cities in 2024",
+    x = "Temperature (°F)",
+    y = "Season",
+    caption = "Density ridges show the full distribution of temperatures"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.position = "bottom"
+  )
+
+# Display the plot
+print(temp_distribution)
+
+# Save the plot
+ggsave("output/figures/temperature_distribution_seasons.png", temp_distribution, width = 10, height = 6, dpi = 300)
+if (github_connected) {
+  commit_and_push_changes("Added temperature distribution by season plot", 
+                         "output/figures/temperature_distribution_seasons.png")
+}
+
+# Precipitation Analysis
+##################################################
+
+# Monthly precipitation by city
+precip_monthly <- weather_daily %>%
+  mutate(month = month(date, label = TRUE, abbr = TRUE)) %>%
+  group_by(city, month) %>%
+  summarise(
+    total_precip_inches = sum(total_precip * 0.0393701, na.rm = TRUE),
+    rainy_days = sum(had_rain, na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+# Create precipitation heatmap
+precip_heatmap <- ggplot(precip_monthly, aes(x = month, y = reorder(city, total_precip_inches),
+                                           fill = total_precip_inches)) +
+  geom_tile(color = "white", size = 0.3) +
+  scale_fill_gradient2(
+    low = "wheat", 
+    mid = "steelblue",
+    high = "navy",
+    midpoint = 3,
+    name = "Total Precipitation (inches)"
+  ) +
+  labs(
+    title = "Monthly Precipitation by City",
+    subtitle = "US Cities in 2024",
+    x = "Month",
+    y = "City",
+    caption = "Data source: Open-Meteo ERA5 Historical Weather API"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 8),
+    plot.caption = element_text(size = 8, color = "gray50")
+  )
+
+# Display the plot
+print(precip_heatmap)
+
+# Save the plot
+ggsave("output/figures/precipitation_heatmap.png", precip_heatmap, width = 12, height = 8, dpi = 300)
+if (github_connected) {
+  commit_and_push_changes("Added precipitation heatmap visualization", 
+                         "output/figures/precipitation_heatmap.png")
+}
+
+# Create final report summary
+final_report <- list(
+  date_processed = Sys.Date(),
+  total_records_processed = nrow(weather_clean),
+  daily_records_created = nrow(weather_daily),
+  cities_analyzed = n_distinct(weather_clean$city),
+  time_period = paste(start_date, "to", end_date),
+  hottest_city = weather_stats$city[which.max(weather_stats$avg_temp_f)],
+  coldest_city = weather_stats$city[which.min(weather_stats$avg_temp_f)],
+  wettest_city = weather_stats$city[which.max(weather_stats$total_precip_inches)],
+  key_files_created = list(
+    raw_data = "data/raw/weather_raw_all_locations.rds",
+    cleaned_data = "data/processed/weather_clean.rds",
+    daily_data = "data/processed/weather_daily.rds",
+    summary_stats = "data/processed/weather_summary_by_location.csv",
+    visualizations = "output/figures/"
+  )
+)
+
+# Save report summary as JSON
+jsonlite::write_json(final_report, "data/processed/weather_processing_report.json", pretty = TRUE)
+if (github_connected) {
+  commit_and_push_changes("Added final weather processing report", 
+                         "data/processed/weather_processing_report.json")
+}
+
+# Print final processing summary
+cat("\n==== WEATHER DATA PROCESSING SUMMARY ====\n")
+cat(sprintf("Processing completed on: %s\n", final_report$date_processed))
+cat(sprintf("Total records processed: %d\n", final_report$total_records_processed))
+cat(sprintf("Daily aggregated records: %d\n", final_report$daily_records_created))
+cat(sprintf("Cities analyzed: %d\n", final_report$cities_analyzed))
+cat(sprintf("Time period: %s\n", final_report$time_period))
+cat(sprintf("Hottest city: %s\n", final_report$hottest_city))
+cat(sprintf("Coldest city: %s\n", final_report$coldest_city))
+cat(sprintf("Wettest city: %s\n", final_report$wettest_city))
+cat("\nData versions backed up and tracked in GitHub for reproducibility.\n")
+cat("Analysis complete!\n")
+```
+
+`
