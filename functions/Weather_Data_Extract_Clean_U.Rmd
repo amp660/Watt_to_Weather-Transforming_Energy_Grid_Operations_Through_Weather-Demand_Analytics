@@ -994,6 +994,204 @@ print("Daily weather summary by season:")
 print(daily_summary)
 ```
 
+Exploratory Data Analysis
+
+```{r}
+# Load required packages for advanced visualizations
+library(tidyverse)
+library(lubridate)
+library(viridis)
+library(patchwork)
+library(plotly)
+library(sf)
+library(maps)
+library(ggridges)
+library(ggpubr)
+
+# Create Summary Statistics
+##################################################
+
+# Overall weather statistics by location
+weather_stats <- weather_clean %>%
+  group_by(city, state, latitude_deg, longitude_deg) %>%
+  summarise(
+    observations = n(),
+    avg_temp_f = mean(temperature_f, na.rm = TRUE),
+    max_temp_f = max(temperature_f, na.rm = TRUE),
+    min_temp_f = min(temperature_f, na.rm = TRUE),
+    temp_range_f = max_temp_f - min_temp_f,
+    avg_humidity = mean(humidity_pct, na.rm = TRUE),
+    total_precip_inches = sum(precipitation_mm * 0.0393701, na.rm = TRUE),
+    avg_wind_mph = mean(wind_speed_mps * 2.23694, na.rm = TRUE),
+    days_with_rain = sum(precipitation_mm > 0) / 24,  # Convert hours to days
+    days_with_heavy_rain = sum(precipitation_mm > 7.6) / 24,
+    .groups = 'drop'
+  ) %>%
+  arrange(desc(avg_temp_f))
+
+# Save weather stats to CSV
+write_csv(weather_stats, "data/processed/city_weather_stats.csv")
+if (github_connected) {
+  commit_and_push_changes("Added city weather statistics", "data/processed/city_weather_stats.csv")
+}
+
+print("Weather Statistics by City:")
+print(weather_stats)
+
+# Temperature Analysis
+##################################################
+
+# Create temperature heatmap visualization
+temp_heatmap <- weather_daily %>%
+  group_by(city, month = month(date, label = TRUE, abbr = TRUE)) %>%
+  summarise(avg_temp = mean(avg_temp_f, na.rm = TRUE), .groups = 'drop') %>%
+  ggplot(aes(x = month, y = reorder(city, avg_temp), fill = avg_temp)) +
+  geom_tile(color = "white", size = 0.3) +
+  scale_fill_viridis(name = "Temperature (°F)", option = "plasma") +
+  labs(
+    title = "Average Monthly Temperature by City",
+    subtitle = "US Cities in 2024",
+    x = "Month",
+    y = "City",
+    caption = "Data source: Open-Meteo ERA5 Historical Weather API"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 8),
+    legend.position = "right",
+    plot.caption = element_text(size = 8, color = "gray50")
+  )
+
+# Display the plot
+print(temp_heatmap)
+
+# Save the plot
+ggsave("output/figures/temperature_heatmap.png", temp_heatmap, width = 12, height = 8, dpi = 300)
+if (github_connected) {
+  commit_and_push_changes("Added temperature heatmap visualization", 
+                        "output/figures/temperature_heatmap.png")
+}
+
+# Temperature distribution by season
+temp_distribution <- weather_clean %>%
+  ggplot(aes(x = temperature_f, y = season, fill = stat(x))) +
+  geom_density_ridges_gradient(scale = 3, rel_min_height = 0.01) +
+  scale_fill_viridis(name = "Temperature (°F)", option = "plasma") +
+  labs(
+    title = "Temperature Distribution by Season",
+    subtitle = "All US Cities in 2024",
+    x = "Temperature (°F)",
+    y = "Season",
+    caption = "Density ridges show the full distribution of temperatures"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.position = "bottom"
+  )
+
+# Display the plot
+print(temp_distribution)
+
+# Save the plot
+ggsave("output/figures/temperature_distribution_seasons.png", temp_distribution, width = 10, height = 6, dpi = 300)
+if (github_connected) {
+  commit_and_push_changes("Added temperature distribution by season plot", 
+                         "output/figures/temperature_distribution_seasons.png")
+}
+
+# Precipitation Analysis
+##################################################
+
+# Monthly precipitation by city
+precip_monthly <- weather_daily %>%
+  mutate(month = month(date, label = TRUE, abbr = TRUE)) %>%
+  group_by(city, month) %>%
+  summarise(
+    total_precip_inches = sum(total_precip * 0.0393701, na.rm = TRUE),
+    rainy_days = sum(had_rain, na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+# Create precipitation heatmap
+precip_heatmap <- ggplot(precip_monthly, aes(x = month, y = reorder(city, total_precip_inches),
+                                           fill = total_precip_inches)) +
+  geom_tile(color = "white", size = 0.3) +
+  scale_fill_gradient2(
+    low = "wheat", 
+    mid = "steelblue",
+    high = "navy",
+    midpoint = 3,
+    name = "Total Precipitation (inches)"
+  ) +
+  labs(
+    title = "Monthly Precipitation by City",
+    subtitle = "US Cities in 2024",
+    x = "Month",
+    y = "City",
+    caption = "Data source: Open-Meteo ERA5 Historical Weather API"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 8),
+    plot.caption = element_text(size = 8, color = "gray50")
+  )
+
+# Display the plot
+print(precip_heatmap)
+
+# Save the plot
+ggsave("output/figures/precipitation_heatmap.png", precip_heatmap, width = 12, height = 8, dpi = 300)
+if (github_connected) {
+  commit_and_push_changes("Added precipitation heatmap visualization", 
+                         "output/figures/precipitation_heatmap.png")
+}
+
+# Create final report summary
+final_report <- list(
+  date_processed = Sys.Date(),
+  total_records_processed = nrow(weather_clean),
+  daily_records_created = nrow(weather_daily),
+  cities_analyzed = n_distinct(weather_clean$city),
+  time_period = paste(start_date, "to", end_date),
+  hottest_city = weather_stats$city[which.max(weather_stats$avg_temp_f)],
+  coldest_city = weather_stats$city[which.min(weather_stats$avg_temp_f)],
+  wettest_city = weather_stats$city[which.max(weather_stats$total_precip_inches)],
+  key_files_created = list(
+    raw_data = "data/raw/weather_raw_all_locations.rds",
+    cleaned_data = "data/processed/weather_clean.rds",
+    daily_data = "data/processed/weather_daily.rds",
+    summary_stats = "data/processed/weather_summary_by_location.csv",
+    visualizations = "output/figures/"
+  )
+)
+
+# Save report summary as JSON
+jsonlite::write_json(final_report, "data/processed/weather_processing_report.json", pretty = TRUE)
+if (github_connected) {
+  commit_and_push_changes("Added final weather processing report", 
+                         "data/processed/weather_processing_report.json")
+}
+
+# Print final processing summary
+cat("\n==== WEATHER DATA PROCESSING SUMMARY ====\n")
+cat(sprintf("Processing completed on: %s\n", final_report$date_processed))
+cat(sprintf("Total records processed: %d\n", final_report$total_records_processed))
+cat(sprintf("Daily aggregated records: %d\n", final_report$daily_records_created))
+cat(sprintf("Cities analyzed: %d\n", final_report$cities_analyzed))
+cat(sprintf("Time period: %s\n", final_report$time_period))
+cat(sprintf("Hottest city: %s\n", final_report$hottest_city))
+cat(sprintf("Coldest city: %s\n", final_report$coldest_city))
+cat(sprintf("Wettest city: %s\n", final_report$wettest_city))
+cat("\nData versions backed up and tracked in GitHub for reproducibility.\n")
+cat("Analysis complete!\n")
+```
+
+`
 
 
 
