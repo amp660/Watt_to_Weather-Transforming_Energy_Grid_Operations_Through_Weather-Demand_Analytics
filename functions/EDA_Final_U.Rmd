@@ -252,3 +252,223 @@ qq_plot <- demand_data %>%
 print(qq_plot)
 ```
 
+U-Shaped Relationship Analysis
+
+```{r}
+# 5. U-SHAPED RELATIONSHIP ANALYSIS
+#------------------------------------------------------
+# 5.1 Visualization of U-shape
+u_shape_plot <- ggplot(demand_data, aes(x = temp_mean, y = energy_value/1000)) +
+  geom_hex(bins = 50) +
+  geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs"), 
+              color = "red", size = 1.5) +
+  scale_fill_viridis(option = "plasma", trans = "log10") +
+  labs(
+    title = "U-Shaped Relationship: Temperature vs Energy Demand",
+    subtitle = "Higher demand at both temperature extremes",
+    x = "Average Temperature (°F)",
+    y = "Energy Demand (GWh)",
+    fill = "Count\n(log scale)",
+    caption = "Data source: Merged weather and energy dataset (2024)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.position = "right"
+  )
+
+print(u_shape_plot)
+ggsave("output/figures/u_shape_relationship.png", u_shape_plot, 
+       width = 10, height = 8, dpi = 300)
+
+# 5.2 Seasonal Temperature vs Demand
+temp_demand_plot <- ggplot(demand_data, 
+                          aes(x = temp_mean, y = energy_value/1000)) +
+  geom_point(alpha = 0.3, color = "steelblue") +
+  geom_smooth(method = "loess", color = "red", size = 1.2) +
+  facet_wrap(~ season, scales = "free_y") +
+  labs(
+    title = "Temperature vs Energy Demand by Season",
+    subtitle = "Non-linear relationship evident in extreme temperatures",
+    x = "Average Temperature (°F)",
+    y = "Energy Demand (GWh)",
+    caption = "Blue points: individual observations; Red line: LOESS smoothed trend"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    strip.background = element_rect(fill = "gray90"),
+    strip.text = element_text(size = 12, face = "bold")
+  )
+
+print(temp_demand_plot)
+ggsave("output/figures/temp_demand_by_season.png", temp_demand_plot, 
+       width = 12, height = 8, dpi = 300)
+
+# 5.3 Publication-ready U-shaped relationship
+publication_plot <- ggplot(demand_data, aes(x = temp_mean, y = energy_value/1000)) +
+  geom_point(alpha = 0.1, color = "gray40", size = 1) +
+  geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs"), 
+              color = "#E31A1C", size = 1.5, se = TRUE, alpha = 0.2) +
+  geom_vline(xintercept = c(40, 80), linetype = "dashed", color = "darkred") +
+  annotate("text", x = 30, y = max(demand_data$energy_value/1000) * 0.9, 
+           label = "Heating\nDemand", color = "darkred", size = 5) +
+  annotate("text", x = 90, y = max(demand_data$energy_value/1000) * 0.9, 
+           label = "Cooling\nDemand", color = "darkred", size = 5) +
+  annotate("text", x = 60, y = min(demand_data$energy_value/1000) * 1.1, 
+           label = "Optimal\nTemperature\nRange", color = "darkgreen", size = 5) +
+  labs(
+    title = "The U-Shaped Relationship Between Temperature and Energy Demand",
+    subtitle = "Evidence of heating and cooling thresholds in energy consumption",
+    x = "Average Daily Temperature (°F)",
+    y = "Energy Demand (GWh)",
+    caption = "Source: 2024 Weather and Energy Data Analysis"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 18, face = "bold"),
+    plot.subtitle = element_text(size = 14),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10),
+    panel.grid.minor = element_blank()
+  )
+
+print(publication_plot)
+ggsave("output/figures/publication_u_shape.png", publication_plot, 
+       width = 12, height = 8, dpi = 300)
+
+# 5.4 Quadratic Model for U-Shape Verification
+quad_model <- lm(energy_value ~ temp_mean + temp_squared, data = demand_data)
+quad_summary <- summary(quad_model)
+
+# Display model results in a formatted table
+quad_coefficients <- data.frame(
+  Parameter = rownames(coef(summary(quad_model))),
+  Estimate = coef(summary(quad_model))[,1],
+  Std_Error = coef(summary(quad_model))[,2],
+  t_value = coef(summary(quad_model))[,3],
+  p_value = coef(summary(quad_model))[,4]
+)
+
+kable(quad_coefficients, caption = "Quadratic Regression Model Results", digits = 4) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) %>%
+  row_spec(3, background = "#f5f5f5")  # Highlight the quadratic term
+
+# Extract key statistics
+model_statistics <- data.frame(
+  Statistic = c("R-squared", "Adjusted R-squared", "F-statistic", "p-value", "Residual std error", "Observations"),
+  Value = c(
+    quad_summary$r.squared,
+    quad_summary$adj.r.squared,
+    quad_summary$fstatistic[1],
+    pf(quad_summary$fstatistic[1], quad_summary$fstatistic[2], quad_summary$fstatistic[3], lower.tail = FALSE),
+    sqrt(mean(quad_model$residuals^2)),
+    nrow(demand_data)
+  )
+)
+
+kable(model_statistics, caption = "Model Statistics", digits = 4) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+
+# 5.5 Calculate optimal temperature (inflection point)
+optimal_temp <- -coef(quad_model)[2] / (2 * coef(quad_model)[3])
+cat(paste("Optimal Temperature (Inflection Point):", round(optimal_temp, 2), "°F\n"))
+
+# 5.6 Bootstrap Confidence Intervals for Inflection Point
+boot_inflection <- function(data, indices) {
+  boot_data <- data[indices, ]
+  boot_model <- lm(energy_value ~ temp_mean + temp_squared, data = boot_data)
+  -coef(boot_model)[2] / (2 * coef(boot_model)[3])
+}
+
+# Run bootstrap with progress indicator
+cat("Running bootstrap for confidence intervals...\n")
+boot_results <- boot(data = demand_data, statistic = boot_inflection, R = 1000)
+inflection_ci <- boot.ci(boot_results, type = "perc")
+
+# Format bootstrap results
+bootstrap_ci <- data.frame(
+  Parameter = "Optimal Temperature",
+  Point_Estimate = optimal_temp,
+  Lower_CI_95 = inflection_ci$percent[4],
+  Upper_CI_95 = inflection_ci$percent[5],
+  Bootstrap_Replicates = 1000
+)
+
+kable(bootstrap_ci, caption = "Bootstrap Confidence Interval for Optimal Temperature", digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+
+# 5.7 Non-parametric validation of U-shape using GAM
+gam_model <- gam(energy_value ~ s(temp_mean, bs = "cs"), data = demand_data)
+gam_summary <- summary(gam_model)
+
+# Format GAM results
+gam_results <- data.frame(
+  Model = "Generalized Additive Model",
+  Effective_DF = round(gam_summary$edf, 2),
+  R_squared = gam_summary$r.sq,
+  Deviance_explained = gam_summary$dev.expl * 100,
+  GCV = gam_summary$sp.criterion
+)
+
+kable(gam_results, caption = "GAM Model Results (Non-parametric Validation)", digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+
+# 5.8 Segmented regression to identify breaking points
+seg_model <- segmented(lm(energy_value ~ temp_mean, data = demand_data), 
+                      seg.Z = ~temp_mean, psi = c(40, 70))
+seg_summary <- summary(seg_model)
+
+# Extract breakpoints and their confidence intervals
+breakpoints <- data.frame(
+  Breakpoint = c("Lower breakpoint", "Upper breakpoint"),
+  Estimate = c(seg_model$psi[1,1], seg_model$psi[2,1]),
+  Std_Error = c(seg_model$psi[1,2], seg_model$psi[2,2]),
+  CI_Lower = c(confint(seg_model)[1,1], confint(seg_model)[2,1]),
+  CI_Upper = c(confint(seg_model)[1,2], confint(seg_model)[2,2])
+)
+
+kable(breakpoints, caption = "Temperature Breakpoints from Segmented Regression", digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+
+# 5.9 Quantile regression to examine relationship across different demand levels
+quantiles <- c(0.1, 0.25, 0.5, 0.75, 0.9)
+quant_results <- data.frame()
+
+for (q in quantiles) {
+  quant_model <- rq(energy_value ~ temp_mean + temp_squared, tau = q, data = demand_data)
+  quant_summary <- summary(quant_model)
+  
+  # Store results
+  quant_results <- rbind(quant_results, data.frame(
+    quantile = q,
+    coef_temp = coef(quant_model)[2],
+    coef_temp_squared = coef(quant_model)[3],
+    optimal_temp = -coef(quant_model)[2] / (2 * coef(quant_model)[3])
+  ))
+}
+
+kable(quant_results, caption = "Quantile Regression Results (U-shape across demand percentiles)", digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+
+# Visualize optimal temperature across quantiles
+quant_plot <- ggplot(quant_results, aes(x = quantile, y = optimal_temp)) +
+  geom_line(size = 1, color = "steelblue") +
+  geom_point(size = 3, color = "steelblue") +
+  geom_hline(yintercept = optimal_temp, linetype = "dashed", color = "red") +
+  annotate("text", x = 0.8, y = optimal_temp + 1, 
+           label = paste("Mean Optimal:", round(optimal_temp, 1), "°F"), 
+           color = "red") +
+  labs(
+    title = "Optimal Temperature Across Demand Quantiles",
+    subtitle = "Examining if the U-curve inflection point varies by demand level",
+    x = "Demand Quantile",
+    y = "Optimal Temperature (°F)"
+  ) +
+  theme_minimal()
+
+print(quant_plot)
+ggsave("output/figures/optimal_temp_quantiles.png", quant_plot, 
+       width = 8, height = 6, dpi = 300)
+```
+
