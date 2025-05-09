@@ -1230,3 +1230,136 @@ ggsave("output/figures/actual_vs_predicted.png", prediction_plot,
        width = 9, height = 7, dpi = 300)
 ```
 
+Economic Implications
+
+```{r}
+# 11. ECONOMIC IMPLICATIONS
+#------------------------------------------------------
+# 11.1 Estimate marginal effect of 1°F deviation from optimal temperature
+# Create a reference dataset at optimal temperature
+optimal_temp_value <- optimal_temp
+
+reference_data <- demand_data %>%
+  filter(abs(temp_mean - optimal_temp_value) < 1) %>%
+  summarise(baseline_demand = mean(energy_value))
+
+baseline_demand <- reference_data$baseline_demand
+
+cat(sprintf("Baseline demand at optimal temperature (%.2f°F): %.2f\n", 
+            optimal_temp_value, baseline_demand))
+
+  
+# 11.2 Calculate percentage change in demand per degree F from optimal
+temp_effect_data <- demand_data %>%
+  mutate(
+    deviation_from_optimal = abs(temp_mean - optimal_temp_value),
+    deviation_category = cut(deviation_from_optimal, 
+                           breaks = c(0, 5, 10, 15, 20, 25, 30, Inf),
+                           labels = c("0-5°F", "5-10°F", "10-15°F", "15-20°F", 
+                                     "20-25°F", "25-30°F", ">30°F"))
+  ) %>%
+  group_by(deviation_category) %>%
+  summarise(
+    mean_deviation = mean(deviation_from_optimal),
+    mean_demand = mean(energy_value),
+    median_demand = median(energy_value),
+    pct_change = (mean_demand / baseline_demand - 1) * 100,
+    pct_change_per_degree = pct_change / mean_deviation,
+    n_obs = n(),
+    .groups = 'drop'
+  )
+
+kable(temp_effect_data, caption = "Economic Impact per Degree F Deviation from Optimal Temperature", digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) %>%
+  row_spec(which.max(temp_effect_data$pct_change_per_degree), background = "#f5f5f5")
+
+# Visualize the economic impact
+econ_impact_plot <- ggplot(temp_effect_data, 
+                          aes(x = deviation_category, y = pct_change_per_degree)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = sprintf("%.2f%%", pct_change_per_degree)), 
+            vjust = -0.5, size = 3.5) +
+  labs(
+    title = "Economic Impact of Temperature Deviations",
+    subtitle = "Percentage increase in energy demand per degree F",
+    x = "Deviation from Optimal Temperature",
+    y = "% Increase in Demand per Degree F",
+    caption = "Based on optimal temperature of 51.5°F"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+print(econ_impact_plot)
+ggsave("output/figures/economic_impact.png", econ_impact_plot, 
+       width = 10, height = 6, dpi = 300)
+
+# 11.3 Create marginal effect curve using GAM model for smoother estimates
+effect_model <- gam(energy_value ~ s(temp_mean, bs = "cs"), data = demand_data)
+
+# Create prediction data
+pred_temps <- seq(min(demand_data$temp_mean), max(demand_data$temp_mean), length.out = 100)
+pred_data <- data.frame(temp_mean = pred_temps)
+
+# Get predicted values
+pred_vals <- predict(effect_model, newdata = pred_data, se.fit = TRUE)
+pred_data$predicted_demand <- pred_vals$fit
+pred_data$se_lower <- pred_vals$fit - 1.96 * pred_vals$se.fit
+pred_data$se_upper <- pred_vals$fit + 1.96 * pred_vals$se.fit
+
+# Calculate percentage change from optimal
+optimal_pred_idx <- which.min(abs(pred_data$temp_mean - optimal_temp_value))
+optimal_demand_pred <- pred_data$predicted_demand[optimal_pred_idx]
+
+pred_data <- pred_data %>%
+  mutate(
+    deviation = abs(temp_mean - optimal_temp_value),
+    pct_change = (predicted_demand / optimal_demand_pred - 1) * 100,
+    pct_change_per_degree = ifelse(deviation > 0, pct_change / deviation, NA)
+  )
+
+# Create smooth curve plot
+smooth_curve_plot <- ggplot(pred_data, aes(x = temp_mean)) +
+  geom_ribbon(aes(ymin = se_lower, ymax = se_upper), alpha = 0.2, fill = "gray") +
+  geom_line(aes(y = predicted_demand), size = 1.2, color = "blue") +
+  geom_vline(xintercept = optimal_temp_value, linetype = "dashed", color = "red") +
+  annotate("text", x = optimal_temp_value + 2, y = max(pred_data$predicted_demand) * 0.9,
+           label = paste("Optimal Temp:", round(optimal_temp_value, 1), "°F"),
+           color = "red", size = 4) +
+  labs(
+    title = "Smooth Energy Demand Curve with Confidence Intervals",
+    subtitle = "GAM model predictions with 95% confidence bands",
+    x = "Temperature (°F)",
+    y = "Predicted Energy Demand",
+    caption = "Dashed red line indicates optimal temperature"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 16, face = "bold"))
+
+print(smooth_curve_plot)
+ggsave("output/figures/smooth_demand_curve.png", smooth_curve_plot, 
+       width = 10, height = 6, dpi = 300)
+
+# 11.4 Calculate marginal cost implications
+# Create example data for cost implications (hypothetical)
+avg_cost_per_unit <- 100  # Example cost in dollars per MWh
+
+cost_implications <- temp_effect_data %>%
+  mutate(
+    baseline_cost = baseline_demand * avg_cost_per_unit,
+    actual_cost = mean_demand * avg_cost_per_unit,
+    cost_increase = actual_cost - baseline_cost,
+    cost_increase_pct = (actual_cost / baseline_cost - 1) * 100,
+    cost_increase_per_degree = cost_increase / mean_deviation
+  ) %>%
+  select(deviation_category, mean_deviation, baseline_cost, actual_cost, 
+         cost_increase, cost_increase_pct, cost_increase_per_degree)
+
+kable(cost_implications, 
+     caption = "Hypothetical Cost Implications of Temperature Deviations ($100/MWh)", 
+     digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
