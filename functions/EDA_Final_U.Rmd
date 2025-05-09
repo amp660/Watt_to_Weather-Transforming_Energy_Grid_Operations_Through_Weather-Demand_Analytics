@@ -838,3 +838,109 @@ ggsave("output/figures/seasonal_curves.png", seasonal_curves,
        width = 10, height = 7, dpi = 300)
 ```
 
+ Time Series Analysis
+
+```{r}
+# 8. TIME SERIES ANALYSIS
+#------------------------------------------------------
+# 8.1 Daily energy patterns
+daily_patterns <- demand_data %>%
+  group_by(date, energy_region) %>%
+  summarise(
+    total_demand = sum(energy_value, na.rm = TRUE) / 1000,
+    avg_temp = mean(temp_mean, na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+# Focus on main energy regions for visualization clarity
+main_regions <- c("ERCO", "CISO", "NYIS", "PJM")
+
+time_series_plot <- ggplot(daily_patterns %>% 
+                           filter(energy_region %in% main_regions), 
+                          aes(x = date, y = total_demand)) +
+  geom_line(aes(color = energy_region), size = 0.8) +
+  facet_wrap(~ energy_region, scales = "free_y", ncol = 2) +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    title = "Daily Energy Demand Patterns by Region",
+    subtitle = "Seasonal variations and regional differences",
+    x = "Date",
+    y = "Total Daily Demand (GWh)",
+    color = "Energy Region",
+    caption = "Note the different y-axis scales for each region"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.position = "none",
+    strip.background = element_rect(fill = "gray90"),
+    strip.text = element_text(size = 12, face = "bold")
+  )
+
+print(time_series_plot)
+ggsave("output/figures/time_series_by_region.png", time_series_plot, 
+       width = 12, height = 8, dpi = 300)
+
+# Decompose time series for seasonal patterns
+# Select a single region for clearer decomposition
+if("ERCO" %in% unique(daily_patterns$energy_region)) {
+  region_for_ts <- "ERCO"
+} else {
+  region_for_ts <- daily_patterns$energy_region[1]
+}
+
+ts_data <- daily_patterns %>%
+  filter(energy_region == region_for_ts) %>%
+  arrange(date)
+
+# Create time series object if we have enough data
+if(nrow(ts_data) >= 14) { # Need at least 2 weeks of data
+  # Convert to time series object
+  ts_energy <- ts(ts_data$total_demand, frequency = 7)  # Weekly seasonality
+  
+  # Decompose the time series
+  decomp <- decompose(ts_energy)
+  
+  # Plot decomposition
+  decomp_data <- data.frame(
+    time = 1:length(decomp$x),
+    observed = as.numeric(decomp$x),
+    trend = as.numeric(decomp$trend),
+    seasonal = as.numeric(decomp$seasonal),
+    random = as.numeric(decomp$random)
+  )
+  
+  # Create decomposition plot
+  p1 <- ggplot(decomp_data, aes(x = time, y = observed)) + 
+    geom_line() + 
+    labs(title = "Observed", x = "Time", y = "Energy Demand (GWh)") +
+    theme_minimal()
+  
+  p2 <- ggplot(decomp_data, aes(x = time, y = trend)) + 
+    geom_line(color = "blue") + 
+    labs(title = "Trend", x = "Time", y = "Energy Demand (GWh)") +
+    theme_minimal()
+  
+  p3 <- ggplot(decomp_data, aes(x = time, y = seasonal)) + 
+    geom_line(color = "red") + 
+    labs(title = "Seasonal", x = "Time", y = "Energy Demand (GWh)") +
+    theme_minimal()
+  
+  p4 <- ggplot(decomp_data, aes(x = time, y = random)) + 
+    geom_line(color = "green") + 
+    labs(title = "Random", x = "Time", y = "Energy Demand (GWh)") +
+    theme_minimal()
+  
+  decomp_plot <- (p1 / p2 / p3 / p4) + 
+    plot_annotation(
+      title = paste("Time Series Decomposition for", region_for_ts, "Energy Region"),
+      subtitle = "Weekly seasonality pattern",
+      caption = "Data decomposed into trend, seasonal, and random components"
+    )
+  
+  print(decomp_plot)
+  ggsave("output/figures/time_series_decomposition.png", decomp_plot, 
+         width = 10, height = 12, dpi = 300)
+}
+```
+
