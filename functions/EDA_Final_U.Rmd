@@ -944,3 +944,74 @@ if(nrow(ts_data) >= 14) { # Need at least 2 weeks of data
 }
 ```
 
+Correlation Analysis
+
+```{r}
+# 9. CORRELATION ANALYSIS
+#------------------------------------------------------
+# 9.1 Correlation matrix
+cor_data <- demand_data %>%
+  select(energy_value, temp_mean, temp_range, humidity_mean, 
+         precipitation_total, wind_speed_mean, cloud_cover_mean) %>%
+  na.omit()
+
+cor_matrix <- cor(cor_data)
+
+# Create correlation plot
+png("output/figures/correlation_matrix.png", width = 800, height = 800)
+corrplot(cor_matrix, 
+         method = "color",
+         type = "upper",
+         order = "hclust",
+         addCoef.col = "black",
+         tl.col = "black",
+         tl.srt = 45,
+         diag = FALSE,
+         title = "Correlation Matrix: Weather Variables vs Energy Demand",
+         mar = c(0,0,2,0))
+dev.off()
+
+# Create a formatted correlation table
+cor_table <- as.data.frame(cor_matrix)
+cor_table$Variable <- rownames(cor_table)
+cor_table <- cor_table %>%
+  select(Variable, everything()) %>%
+  mutate(across(where(is.numeric), ~round(., 3)))
+
+kable(cor_table, caption = "Correlation Matrix of Weather and Energy Variables") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = TRUE)
+
+# Scatter plot matrix of key variables
+pairs_plot <- ggplot(cor_data %>% sample_n(min(5000, nrow(cor_data))), 
+                    aes(x = temp_mean, y = energy_value/1000)) +
+  geom_point(alpha = 0.5, size = 2, color = "steelblue") +
+  geom_smooth(method = "loess", color = "red", se = FALSE) +
+  facet_wrap(~ cut(humidity_mean, breaks = 4), scales = "free_y") +
+  labs(
+    title = "Energy Demand vs Temperature at Different Humidity Levels",
+    subtitle = "Exploring interaction effects",
+    x = "Average Temperature (°F)",
+    y = "Energy Demand (GWh)",
+    caption = "LOESS smoothed trend lines show temperature-demand relationship"
+  ) +
+  theme_minimal()
+
+print(pairs_plot)
+ggsave("output/figures/humidity_interaction_plot.png", pairs_plot, 
+       width = 10, height = 8, dpi = 300)
+
+# Partial correlation analysis
+# Calculate partial correlation between temperature and energy, controlling for humidity
+partial_cor <- cor(resid(lm(energy_value ~ humidity_mean, data = cor_data)),
+                  resid(lm(temp_mean ~ humidity_mean, data = cor_data)))
+
+partial_cor_df <- data.frame(
+  Relationship = "Temperature ~ Energy (controlling for humidity)",
+  Correlation = partial_cor,
+  Raw_Correlation = cor(cor_data$temp_mean, cor_data$energy_value)
+)
+
+kable(partial_cor_df, caption = "Partial Correlation Analysis", digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
