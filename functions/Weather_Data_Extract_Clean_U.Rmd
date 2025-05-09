@@ -587,6 +587,247 @@ if (github_connected) {
 }
 ```
 
+Data Cleaning and Transformation
+
+```{r}
+# DATA CLEANING AND ENRICHMENT - WEATHER DATA
+##################################################
+
+# Load the raw weather data (if not already in memory)
+if(!exists("weather_all_locations")) {
+  weather_raw <- readRDS("data/raw/weather_raw_all_locations.rds")
+} else {
+  weather_raw <- weather_all_locations
+}
+
+# Create backup of raw data before cleaning
+raw_data_backup_file <- create_raw_data_backup(weather_raw, "weather_raw_before_cleaning")
+cat(sprintf("Raw data backed up before cleaning: %s\n", raw_data_backup_file))
+
+# Clean and transform weather data
+weather_clean <- weather_raw %>%
+  # Remove exact duplicate rows if any
+  # Explanation: Duplicates can occur from API responses and create bias in analysis
+  distinct() %>%
+  
+  # Rename columns for clarity and consistency
+  # Explanation: Clear, descriptive column names improve code readability and documentation
+  rename(
+    location_name = location,
+    latitude_deg = latitude,
+    longitude_deg = longitude,
+    datetime_utc = datetime,
+    temperature_c = temperature,
+    humidity_pct = humidity,
+    precipitation_mm = precipitation,
+    wind_speed_mps = wind_speed,
+    cloud_cover_pct = cloud_cover
+  ) %>%
+  
+  # Add time-based features
+  # Explanation: Time components enable temporal analysis and seasonality detection
+  mutate(
+    # Extract date components
+    date = as.Date(datetime_utc),
+    year = year(datetime_utc),
+    month = month(datetime_utc),
+    day = day(datetime_utc),
+    hour = hour(datetime_utc),
+    weekday = wday(datetime_utc, label = TRUE, abbr = TRUE),
+    
+    # Create season
+    # Explanation: Seasons are key for understanding weather patterns
+    season = case_when(
+      month %in% c(12, 1, 2) ~ "Winter",
+      month %in% c(3, 4, 5) ~ "Spring",
+      month %in% c(6, 7, 8) ~ "Summer",
+      month %in% c(9, 10, 11) ~ "Fall"
+    ),
+    
+    # Create time of day
+    # Explanation: Daily patterns important for energy consumption analysis
+    time_of_day = case_when(
+      hour >= 5 & hour < 12 ~ "Morning",
+      hour >= 12 & hour < 17 ~ "Afternoon",
+      hour >= 17 & hour < 21 ~ "Evening",
+      TRUE ~ "Night"
+    ),
+    
+    # Extract state from location
+    # Explanation: State-level analysis will be important for energy region mapping
+    state = str_extract(location_name, "[A-Z]{2}$"),
+    city = str_remove(location_name, ",\\s*[A-Z]{2}$")
+  ) %>%
+  
+  # Add calculated weather variables
+  # Explanation: Derived features capture important weather phenomena not in raw data
+  mutate(
+    # Convert temperature to Fahrenheit
+    # Explanation: Standard unit in US, needed for US-based analysis
+    temperature_f = temperature_c * 9/5 + 32,
+    
+    # Calculate heat index (simplified formula for F)
+    # Explanation: Heat index affects energy consumption for cooling
+    heat_index_f = case_when(
+      temperature_f < 80 ~ temperature_f,
+      TRUE ~ -42.379 + 2.04901523 * temperature_f + 10.14333127 * humidity_pct - 
+             0.22475541 * temperature_f * humidity_pct - 0.00683783 * temperature_f^2 - 
+             0.05481717 * humidity_pct^2 + 0.00122874 * temperature_f^2 * humidity_pct + 
+             0.00085282 * temperature_f * humidity_pct^2 - 0.00000199 * temperature_f^2 * humidity_pct^2
+    ),
+    
+    # Categorize precipitation
+    # Explanation: Categorical variables aid in threshold analysis and visualization
+    precipitation_category = case_when(
+      precipitation_mm == 0 ~ "None",
+      precipitation_mm < 2.5 ~ "Light",
+      precipitation_mm < 7.6 ~ "Moderate",
+      precipitation_mm < 50 ~ "Heavy",
+      TRUE ~ "Extreme"
+    ),
+    
+    # Categorize wind speed (Beaufort scale)
+    # Explanation: Standard meteorological classification for interpretation
+    wind_category = case_when(
+      wind_speed_mps < 0.5 ~ "Calm",
+      wind_speed_mps < 1.6 ~ "Light Air",
+      wind_speed_mps < 3.4 ~ "Light Breeze",
+      wind_speed_mps < 5.5 ~ "Gentle Breeze",
+      wind_speed_mps < 8.0 ~ "Moderate Breeze",
+      wind_speed_mps < 10.8 ~ "Fresh Breeze",
+      wind_speed_mps < 13.9 ~ "Strong Breeze",
+      wind_speed_mps < 17.2 ~ "High Wind",
+      wind_speed_mps < 20.8 ~ "Gale",
+      wind_speed_mps < 24.5 ~ "Strong Gale",
+      wind_speed_mps < 28.5 ~ "Storm",
+      wind_speed_mps < 32.7 ~ "Violent Storm",
+      TRUE ~ "Hurricane"
+    ),
+    
+    # Create a combined weather condition
+    # Explanation: Simplified weather state for high-level analysis
+    weather_condition = case_when(
+      precipitation_mm > 0 & temperature_c <= 0 ~ "Snow/Freezing Rain",
+      precipitation_mm > 0 ~ "Rain",
+      cloud_cover_pct >= 80 ~ "Overcast",
+      cloud_cover_pct >= 40 ~ "Partly Cloudy",
+      TRUE ~ "Clear"
+    ),
+    
+    # Add extreme weather flags
+    # Explanation: Extreme weather events strongly impact energy usage
+    is_extreme_heat = temperature_f >= 95,
+    is_extreme_cold = temperature_f <= 20,
+    is_heavy_precipitation = precipitation_mm >= 10
+  ) %>%
+  
+  # Reorder columns for better organization
+  select(
+    # Location information
+    location_name, city, state, latitude_deg, longitude_deg,
+    
+    # Time information
+    datetime_utc, date, year, month, day, hour, weekday, season, time_of_day,
+    
+    # Weather measurements
+    temperature_c, temperature_f, humidity_pct, precipitation_mm, 
+    wind_speed_mps, cloud_cover_pct, heat_index_f,
+    
+    # Categorical variables
+    precipitation_category, wind_category, weather_condition,
+    
+    # Extreme weather flags
+    is_extreme_heat, is_extreme_cold, is_heavy_precipitation
+  )
+
+# Backup cleaned data
+cleaned_data_backup_file <- create_raw_data_backup(weather_clean, "weather_clean")
+cat(sprintf("Cleaned data backed up: %s\n", cleaned_data_backup_file))
+
+# Check for missing values and outliers
+weather_missing <- weather_clean %>%
+  summarise(across(everything(), ~sum(is.na(.))))
+
+# Create outlier check function
+identify_outliers <- function(x, threshold = 3) {
+  if(!is.numeric(x)) return(NA)
+  
+  mu <- mean(x, na.rm = TRUE)
+  sigma <- sd(x, na.rm = TRUE)
+  
+  # Z-score based outlier detection
+  outliers <- which(abs(x - mu) > threshold * sigma)
+  return(length(outliers))
+}
+
+# Apply outlier detection
+weather_outliers <- weather_clean %>%
+  summarise(across(where(is.numeric), ~identify_outliers(.)))
+
+# Report data quality metrics
+cat("Missing values in weather data:\n")
+print(weather_missing)
+
+cat("\nPotential outliers in weather data (z-score > 3):\n")
+print(weather_outliers)
+
+# Save cleaned weather data
+saveRDS(weather_clean, "data/processed/weather_clean.rds")
+write_csv(weather_clean, "data/processed/weather_clean.csv")
+
+# Create a smaller tracked version for GitHub
+weather_clean_sample <- weather_clean %>%
+  group_by(location_name, date) %>%
+  summarise(
+    avg_temp_f = mean(temperature_f, na.rm = TRUE),
+    avg_humidity = mean(humidity_pct, na.rm = TRUE),
+    total_precip = sum(precipitation_mm, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  head(100)  # Keep only a small sample for GitHub tracking
+
+# Save the sample file for GitHub tracking
+write_csv(weather_clean_sample, "data/processed/weather_clean_sample.csv")
+
+# Commit the changes to GitHub
+if (github_connected) {
+  commit_and_push_changes(
+    commit_message = sprintf("Data cleaning completed on %s - %d records processed", 
+                            Sys.Date(), nrow(weather_clean)),
+    files_to_add = "data/processed/weather_clean_sample.csv README.md"
+  )
+}
+
+# Create summary statistics
+weather_summary <- weather_clean %>%
+  group_by(location_name, state) %>%
+  summarise(
+    records = n(),
+    avg_temp_f = mean(temperature_f, na.rm = TRUE),
+    max_temp_f = max(temperature_f, na.rm = TRUE),
+    min_temp_f = min(temperature_f, na.rm = TRUE),
+    total_precip_mm = sum(precipitation_mm, na.rm = TRUE),
+    avg_humidity = mean(humidity_pct, na.rm = TRUE),
+    avg_wind_speed = mean(wind_speed_mps, na.rm = TRUE),
+    extreme_heat_days = sum(is_extreme_heat, na.rm = TRUE) / 24,  # Convert hours to days
+    extreme_cold_days = sum(is_extreme_cold, na.rm = TRUE) / 24,  # Convert hours to days
+    .groups = 'drop'
+  ) %>%
+  arrange(desc(avg_temp_f))
+
+# Save and commit summary statistics
+write_csv(weather_summary, "data/processed/weather_summary_by_location.csv")
+if (github_connected) {
+  commit_and_push_changes("Added weather summary statistics by location", 
+                         "data/processed/weather_summary_by_location.csv")
+}
+
+print("Weather summary by location:")
+print(weather_summary)
+```
+
+
+
 
 
 `
