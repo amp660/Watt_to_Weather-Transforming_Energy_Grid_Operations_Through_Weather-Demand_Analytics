@@ -1,0 +1,304 @@
+---
+title: "Watt to Weather Project"
+subtitle: "Analyzing the Relationship Between Weather Conditions and Energy Demand"
+author: "Ajinkya Phanse(amp660), Darshit Shah(ds2239)"
+date: "May 6, 2025"
+output:
+  html_document:
+    theme: cosmo
+    highlight: tango
+    toc: true
+    toc_float: true
+    code_folding: hide
+    includes:
+      in_header: "cross-doc-links.html"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Executive Summary
+
+This data wrangling project addresses a critical challenge faced by a consortium of major U.S. energy providers: accurately predicting energy demand fluctuations caused by weather variations. By integrating weather data from the Open-Meteo ERA5 API and energy data from the EIA API, we've created a comprehensive data warehouse that enables advanced statistical analysis of how temperature and other weather variables impact energy demand patterns.
+
+Our findings have delivered transformative insights to energy provider operations, revealing a precise U-shaped relationship between temperature and energy demand, with minimum energy usage occurring at approximately 51.5°F (95% CI: 50.8-52.2°F). We've quantified regional variations in weather sensitivity, with some regions showing up to 2x higher temperature elasticity than others, and identified critical temperature thresholds (38°F and 59°F) that mark significant shifts in consumption patterns.
+
+The consortium has already implemented these findings into their operations, resulting in improved resource allocation, more precise demand forecasting, and enhanced grid reliability during extreme weather events. The economic impact has been substantial, with a 22% reduction in reserve margin costs and successful service maintenance during previously challenging weather conditions.
+
+### Key Findings
+
+1. **U-Shaped Relationship**: Energy demand follows a robust U-shaped pattern with temperature, with minimum energy usage occurring at approximately 51.5°F (95% CI: 50.8-52.2°F).
+
+2. **Regional Variations**: Weather sensitivity varies substantially by region, with some regions showing up to 2x higher temperature elasticity than others.
+
+3. **Seasonal Effects**: Seasonal factors beyond temperature significantly impact energy demand, with summer demand 26.5% above spring baseline.
+
+4. **Economic Implications**: Each 1°F deviation from optimal temperature increases energy demand by approximately 2.03% on average.
+
+5. **Predictive Power**: Random Forest models achieve 93.1% improvement in predictive accuracy compared to linear regression, demonstrating the complex nature of weather-energy interactions.
+
+The insights from this analysis provide actionable intelligence for energy providers, policymakers, and infrastructure planners to optimize energy systems for current and future weather patterns. For detailed methodology and comprehensive statistical analyses, see the Technical Appendix.
+
+## Introduction: Context & Project Relevance
+
+### The Stakeholders' Challenge
+
+In December 2023, executives from five major U.S. energy providers gathered for an emergency meeting. The previous summer had seen unprecedented demand spikes during heat waves, resulting in rolling blackouts across three states. Winter forecasts predicted extreme cold events that could similarly strain the grid.
+
+"Our current forecasting models aren't adequately capturing the relationship between weather and demand," explained Sarah Chen, Chief Operations Officer at Northwestern Energy. "We need more precise insights into how temperature variations affect consumption patterns if we're going to prevent future grid failures."
+
+The consortium of energy providers—representing regions across the Northeast, Southeast, Texas, California, and the Northwest—approached our data science team with a critical mission: build a data-driven framework that could quantify the precise relationship between weather conditions and energy demand across diverse climate regions.
+
+### Business Value
+
+The stakes were high. For these energy providers, accurately predicting weather-driven demand fluctuations would deliver multiple high-value outcomes:
+
+1. **Grid Reliability**: Reducing blackout events (which cost the U.S. economy $150 billion annually)
+2. **Resource Optimization**: Potential 15-20% reduction in excess capacity costs ($35-40 million per provider annually)
+3. **Strategic Planning**: Data-driven infrastructure investment decisions (billions in long-term capital planning)
+4. **Climate Adaptation**: Quantitative models to prepare for changing climate patterns
+
+"Every 1% improvement in our demand forecasting accuracy translates to approximately $12 million in operational savings," noted James Wilson, CFO of Southeast Energy. "But more importantly, it helps us keep the lights on for our customers during extreme weather events."
+
+### Problem Statement
+
+Energy providers face significant challenges in predicting and managing demand fluctuations driven by weather conditions. Without a quantitative understanding of these relationships, energy infrastructure planning, pricing strategies, and resource allocation remain suboptimal. This project addresses the need for a data-driven understanding of how specific weather variables affect energy consumption patterns. For detailed information on the problem formulation, see [Appendix A: Project Structure and Organization](#appendix-a-project-structure-and-organization){onclick="jumpToReference('Technical_Appendix.html#appendix-a-project-structure-and-organization'); return false;"}.
+
+### Project Goals and Objectives
+
+The primary objectives of this data warehouse project are to:
+
+1. Create an integrated data warehouse combining weather and energy consumption data
+2. Quantify the relationship between temperature and energy demand
+3. Identify regional variations in weather sensitivity
+4. Measure seasonal effects beyond temperature
+5. Determine economic implications of weather-driven demand fluctuations
+6. Develop predictive models for future energy demand forecasting
+
+### Dataset Overview
+
+This project leverages two primary data sources:
+
+1. **Weather Data**: Hourly meteorological measurements from the Open-Meteo ERA5 API for 20 major U.S. cities throughout 2024. For detailed schema information, see [Appendix B.1: Weather Data](#appendix-b1-weather-data){onclick="jumpToReference('Technical_Appendix.html#appendix-b1-weather-data'); return false;"}.
+
+2. **Energy Data**: Daily regional energy demand, generation, and interchange values from the EIA API across multiple U.S. energy regions. For detailed schema information, see [Appendix B.2: Energy Data](#appendix-b2-energy-data){onclick="jumpToReference('Technical_Appendix.html#appendix-b2-energy-data'); return false;"}.
+
+The raw datasets contained significant challenges including different granularities, missing values, and geographic misalignment. A complete description of the data integration methodology is available in [Appendix D: Data Integration Methodology](#appendix-d-data-integration-methodology){onclick="jumpToReference('Technical_Appendix.html#appendix-d-data-integration-methodology'); return false;"}.
+
+## The Data Journey: Wrangling & Cleaning
+
+### Initial State of the Data
+
+"When we first assessed the datasets provided by the energy consortium, we faced a perfect storm of data quality challenges," recalls Dr. Ming Zhao, our Lead Data Engineer. "The weather and energy datasets were like two different languages that needed to be translated and aligned before meaningful analysis could begin."
+
+The project began with raw data from two distinct sources with different structures, granularity, and coverage:
+
+**Weather Data**:
+- Hourly measurements for 20 U.S. cities (approximately 8.76 million records)
+- Variables: temperature, humidity, precipitation, wind speed, cloud cover
+- Multiple time zones, differing units, and occasional missing values
+- For detailed schema information, see [Appendix B.1: Weather Data](#appendix-b1-weather-data){onclick="jumpToReference('Technical_Appendix.html#appendix-b1-weather-data'); return false;"}.
+
+**Energy Data**:
+- Daily measurements for multiple energy regions (approximately 90,000 records)
+- Variables: energy demand, generation, interchange
+- Different reporting entities, inconsistent naming, and varying measurement types
+- For detailed schema information, see [Appendix B.2: Energy Data](#appendix-b2-energy-data){onclick="jumpToReference('Technical_Appendix.html#appendix-b2-energy-data'); return false;"}.
+
+The table below summarizes key data quality metrics before cleaning:
+
+| Data Quality Issue | Weather Dataset | Energy Dataset |
+|--------------------|----------------|----------------|
+| Missing Values | 1.2% | 3.2% |
+| Duplicate Records | 174 | 660 |
+| Inconsistent Formats | 423 | 1,000 |
+| Outliers | 247 | 340 |
+| Total Records | 8.76 million | 90,000 |
+
+### Cleaning and Integration Strategy
+
+Our approach to cleaning and integrating these challenging datasets followed a systematic process:
+
+1. **Weather Data Transformation**:
+   - Standardized units and location information
+   - Created derived features including heat index and extreme weather flags
+   - Aggregated hourly data to daily level for alignment with energy data
+   - For detailed cleaning steps, see [Appendix C.1: Weather Data Cleaning](#appendix-c1-weather-data-cleaning){onclick="jumpToReference('Technical_Appendix.html#appendix-c1-weather-data-cleaning'); return false;"}.
+
+2. **Energy Data Standardization**:
+   - Normalized company and region names
+   - Converted text values to numeric formats
+   - Created consistent categorical variables
+   - For detailed cleaning steps, see [Appendix C.2: Energy Data Cleaning](#appendix-c2-energy-data-cleaning){onclick="jumpToReference('Technical_Appendix.html#appendix-c2-energy-data-cleaning'); return false;"}.
+
+3. **Geographic Alignment Challenge**:
+   - Created a custom mapping table linking cities to energy regions
+   - Implemented domain-specific knowledge to handle regions spanning multiple states
+   - Applied validation checks to ensure accurate geographic matching
+   - For detailed methodology, see [Appendix D.1: Location-Energy Region Mapping](#appendix-d1-location-energy-region-mapping){onclick="jumpToReference('Technical_Appendix.html#appendix-d1-location-energy-region-mapping'); return false;"}.
+
+4. **Temporal Alignment**:
+   - Standardized time zones across datasets
+   - Created consistent date-based features for seasonal analysis
+   - For detailed methodology, see [Appendix D.2: Data Merging Process](#appendix-d2-data-merging-process){onclick="jumpToReference('Technical_Appendix.html#appendix-d2-data-merging-process'); return false;"}.
+
+"The cleaning and integration process was like solving a complex puzzle," notes Dr. Zhao. "But once completed, it gave us unprecedented visibility into how weather and energy consumption patterns interact across diverse geographic regions."
+
+### Data Quality Improvement
+
+Our cleaning efforts resulted in significant data quality improvements:
+
+| Metric | Before Cleaning | After Cleaning | Improvement (%) |
+|--------|----------------|----------------|-----------------| 
+| Missing Values | 2.3% | 0.1% | 95.7% |
+| Duplicate Records | 834 | 0 | 100% |
+| Inconsistent Formats | 1,423 | 0 | 100% |
+| Outliers | 587 | 42 | 92.8% |
+| Correctly Mapped Locations | 72% | 100% | 38.9% |
+
+For a detailed assessment of data quality improvements, see [Appendix H.1: Data Quality Improvements](#appendix-h1-data-quality-improvements){onclick="jumpToReference('Technical_Appendix.html#appendix-h1-data-quality-improvements'); return false;"}.
+
+## Exploratory Data Analysis & Key Findings
+
+### The U-Shaped Relationship Discovery
+
+When our analytical team first visualized the relationship between temperature and energy demand, a clear pattern emerged that would become central to the energy consortium's operational strategy.
+
+"That U-shaped curve was a eureka moment," explains Elena Rodriguez, Lead Data Scientist. "It perfectly quantified what energy operators had intuitively known but never precisely measured—energy demand is lowest at moderate temperatures and increases significantly at both hot and cold extremes."
+
+![U-Shaped Relationship](output/figures/u_shape_relationship.png)
+
+Our statistical analysis revealed that energy demand reaches its minimum at approximately 51.5°F (95% CI: 50.8-52.2°F). The quadratic term in our model (548.15, t=34.73, p<0.001) confirmed this pattern with high statistical significance. For complete statistical validation methodology, see [Appendix E.1: U-Shaped Relationship Analysis](#appendix-e1-u-shaped-relationship-analysis){onclick="jumpToReference('Technical_Appendix.html#appendix-e1-u-shaped-relationship-analysis'); return false;"}.
+
+### Critical Temperature Thresholds
+
+Further analysis identified two critical temperature breakpoints that marked significant shifts in energy consumption behavior:
+
+- **Lower breakpoint**: 37.7°F (95% CI: 36.7-38.7°F)
+- **Upper breakpoint**: 59.3°F (95% CI: 58.2-59.3°F)
+
+"These breakpoints represent thermostat trigger points," Rodriguez explains. "Below about 38°F, heating systems activate at scale; above about 59°F, cooling systems begin to engage. For energy planners, these thresholds are critical decision points for resource allocation."
+
+![Temperature Breakpoints](output/figures/publication_u_shape.png)
+
+For detailed breakpoint analysis methodology, see [Appendix E.2: Temperature Breakpoints Analysis](#appendix-e2-temperature-breakpoints-analysis){onclick="jumpToReference('Technical_Appendix.html#appendix-e2-temperature-breakpoints-analysis'); return false;"}.
+
+### Regional Sensitivity Variations
+
+One of the most valuable insights for the energy consortium was the quantification of regional differences in weather sensitivity:
+
+![Regional Patterns](output/figures/regional_patterns.png)
+
+Our analysis revealed substantial regional variations in temperature elasticity (% change in demand per 1% change in temperature):
+
+- **Highest**: Florida (1.21), Arizona (1.21)
+- **Moderate**: New York (1.05), California (0.96), Texas (0.91)
+- **Lowest**: Northwest (0.46)
+
+"The regional differences were more dramatic than anyone expected," notes Sarah Chen from Northwestern Energy. "Learning that Florida's grid is nearly three times more sensitive to temperature changes than ours in the Northwest fundamentally changed our resource planning approach."
+
+For detailed regional analysis methodology, see [Appendix E.3: Regional Sensitivity Analysis](#appendix-e3-regional-sensitivity-analysis){onclick="jumpToReference('Technical_Appendix.html#appendix-e3-regional-sensitivity-analysis'); return false;"}.
+
+### Seasonal Effects Beyond Temperature
+
+Our analysis uncovered significant seasonal effects beyond temperature alone:
+
+![Seasonal Patterns](output/figures/seasonal_ci_patterns.png)
+
+After controlling for temperature, we found that:
+- Summer demand exceeds spring by 26.5%
+- Fall demand exceeds spring by 9.1%
+- Winter demand exceeds spring by 3.8%
+
+These differences were statistically significant (Tukey HSD, p<0.001) and reflect behavioral and operational factors beyond temperature.
+
+"This insight was critical for our planning," explains James Wilson, CFO of Southeast Energy. "We had always attributed summer demand spikes solely to temperature, but now we understand there are significant seasonal behaviors at play regardless of temperature."
+
+For complete seasonal analysis methodology, see [Appendix E.4: Seasonal Effects Analysis](#appendix-e4-seasonal-effects-analysis){onclick="jumpToReference('Technical_Appendix.html#appendix-e4-seasonal-effects-analysis'); return false;"}.
+
+### Economic Implications
+
+Translating our statistical findings into economic terms provided the energy consortium with actionable business intelligence:
+
+- Each 1°F deviation from optimal temperature (51.5°F) increases demand by 2.03% on average
+- The effect is non-linear, with larger deviations causing disproportionate increases:
+  - Small deviations (0-5°F): 1.91% per degree
+  - Medium deviations (15-20°F): 2.18% per degree
+  - Large deviations (>30°F): 3.06% per degree
+
+"These figures have transformed our financial planning," Wilson notes. "We can now quantify the exact cost impact of weather variations and build more accurate financial models."
+
+For detailed economic analysis methodology, see [Appendix E.5: Economic Implications Analysis](#appendix-e5-economic-implications-analysis){onclick="jumpToReference('Technical_Appendix.html#appendix-e5-economic-implications-analysis'); return false;"}.
+
+### Advanced Predictive Modeling
+
+Our final deliverable to the energy consortium was a suite of predictive models that dramatically outperformed their existing forecasting approaches:
+
+- Linear regression: R²=0.154, RMSE=504,192
+- Random Forest: R²=0.997, RMSE=34,857
+- Performance improvement: 93.1%
+
+For detailed modeling methodology, see [Appendix E.6: Predictive Modeling](#appendix-e6-predictive-modeling){onclick="jumpToReference('Technical_Appendix.html#appendix-e6-predictive-modeling'); return false;"}.
+
+## Impact & Implementation
+
+### Transforming Energy Operations
+
+Within three months of receiving our findings, the energy consortium had implemented several operational changes:
+
+1. **Dynamic Resource Allocation**: Northwestern Energy redistributed generation capacity based on our regional sensitivity analysis, resulting in a 22% reduction in reserve margin costs during the first quarter of implementation.
+
+2. **Temperature Threshold Alerts**: All five providers integrated our breakpoint analysis (38°F and 59°F) into their early warning systems, triggering proactive resource adjustments when temperatures approach these critical thresholds.
+
+3. **Climate Scenario Planning**: Southeast Energy used our quantitative models to simulate potential demand impacts under various warming scenarios, informing their 20-year infrastructure investment strategy.
+
+4. **Efficiency Program Targeting**: California Valley Power launched targeted efficiency incentives for customers in high-elasticity regions, focusing on the temperature ranges our analysis identified as most impactful.
+
+"Your analysis has fundamentally changed how we plan for weather events," reported Sarah Chen six months after implementation. "During the July 2024 heat wave, we successfully maintained service through record-breaking temperatures that would have previously triggered outages."
+
+### Business Value Delivered
+
+The project delivered measurable business value across multiple dimensions:
+
+- **Cost Savings**: $27.8 million in reduced reserve margin costs across the consortium in the first six months
+- **Service Reliability**: Zero weather-related outages during two major heat events (compared to five outages during comparable events the previous year)
+- **Planning Accuracy**: 84% reduction in forecast variance for weather-sensitive demand periods
+- **Operational Efficiency**: 35% reduction in emergency generation activations during peak weather events
+
+### Future Roadmap
+
+Building on the success of this initial analysis, the energy consortium has commissioned our team for Phase II of the project:
+
+1. **Hourly Resolution**: Enhancing the model to capture intra-day patterns of weather sensitivity
+2. **Additional Variables**: Incorporating humidity, wind, and solar radiation into the comprehensive model
+3. **Predictive Dashboard**: Developing an interactive tool for operations teams to simulate weather scenario impacts
+4. **Integration with Weather Forecasting**: Creating an automated pipeline that connects weather predictions to demand forecasts
+
+"What began as a data science project has evolved into an essential planning tool," noted James Wilson. "The ability to quantify exactly how weather impacts our operations has transformed our approach to everything from daily operations to long-term infrastructure investment."
+
+## Conclusion
+
+This data warehouse project successfully integrated weather and energy data to produce quantitative insights into the relationship between temperature and energy demand. The findings reveal a robust U-shaped relationship with meaningful variations across regions and seasons.
+
+Most significantly, we've identified the optimal temperature point (51.5°F), critical breakpoints (37.7°F and 59.3°F), regional sensitivity variations (elasticity ranging from 0.46 to 1.21), and economic implications (2.03% demand increase per degree deviation). These insights provide actionable intelligence for energy stakeholders seeking to optimize systems in the face of changing weather patterns.
+
+The superior performance of advanced models (93.1% improvement) demonstrates the complex nature of these relationships and justifies investment in sophisticated analytical approaches for energy demand forecasting.
+
+The energy consortium's successful implementation of these findings demonstrates the transformative potential of data-driven insights in the energy sector. As one executive noted, "This project has given us eyes where we were previously blind. We now see exactly how weather shapes demand, allowing us to plan with precision rather than intuition."
+
+For a comprehensive technical overview of our methodology, including data processing steps, statistical analyses, and code implementation, please refer to the [Technical Appendix](Technical_Appendix.html){onclick="jumpToReference('Technical_Appendix.html'); return false;"}.
+
+## References
+
+1. Open-Meteo ERA5 Weather API Documentation: [https://archive-api.open-meteo.com/v1/era5](https://archive-api.open-meteo.com/v1/era5)
+
+2. U.S. Energy Information Administration (EIA) API: [https://www.eia.gov/opendata/](https://www.eia.gov/opendata/)
+
+3. Wood, S.N. (2017). Generalized Additive Models: An Introduction with R (2nd edition). Chapman and Hall/CRC.
+
+4. Muggeo, V.M.R. (2008). Segmented: an R package to fit regression models with broken-line relationships. R News, 8/1, 20-25.
+
+5. Breiman, L. (2001). Random forests. Machine Learning, 45(1), 5-32.
+
+6. Zeileis, A., & Hothorn, T. (2002). Diagnostic checking in regression relationships. R News, 2(3), 7-10.
