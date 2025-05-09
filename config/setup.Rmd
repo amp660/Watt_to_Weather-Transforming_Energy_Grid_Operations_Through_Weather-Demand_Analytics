@@ -1,0 +1,348 @@
+# ============================================================================
+# setup.R - Shared configuration and helper functions for Weather-Energy
+# Data Warehouse Project
+# 
+# This file centralizes parameters, libraries, and utility functions used
+# across multiple analysis scripts in the project.
+# ============================================================================
+
+# -----------------------------------------------------------------------------
+# 1. ENVIRONMENT SETUP
+# -----------------------------------------------------------------------------
+
+# Set random seed for reproducibility
+set.seed(42)
+
+# Configure global options
+options(
+  scipen = 999,           # Avoid scientific notation
+  digits = 4,             # Number of digits to print
+  max.print = 1000,       # Limit console output
+  width = 100,            # Console width
+  dplyr.summarise.inform = FALSE  # Suppress dplyr grouping messages
+)
+
+# -----------------------------------------------------------------------------
+# 2. LIBRARY MANAGEMENT
+# -----------------------------------------------------------------------------
+
+# Function to load libraries with version checks
+load_required_packages <- function() {
+  # Core packages for data wrangling and visualization
+  required_packages <- c(
+    "tidyverse",     # Data manipulation and visualization
+    "httr",          # API requests
+    "jsonlite",      # JSON parsing
+    "lubridate",     # Date handling
+    "readxl",        # Excel file handling  
+    "knitr",         # Document generation
+    "kableExtra",    # Table formatting
+    "scales",        # Scale formatting
+    "viridis",       # Color palettes
+    "janitor",       # Data cleaning
+    "skimr"          # Summary statistics
+  )
+  
+  # Visualization packages
+  viz_packages <- c(
+    "ggplot2",       # Static visualization
+    "plotly",        # Interactive visualization
+    "leaflet",       # Interactive maps
+    "dygraphs",      # Interactive time series
+    "networkD3",     # Network visualization
+    "corrplot",      # Correlation plots
+    "patchwork",     # Combining plots
+    "DT"             # Interactive tables
+  )
+  
+  # Statistical packages
+  stat_packages <- c(
+    "mgcv",          # GAM models
+    "lmtest",        # Hypothesis testing
+    "car",           # VIF analysis
+    "quantreg",      # Quantile regression
+    "segmented",     # Segmented regression
+    "Hmisc",         # Statistical tests
+    "nlme",          # Mixed-effects models
+    "sandwich",      # Robust standard errors
+    "boot",          # Bootstrapping
+    "performance",   # Model diagnostics
+    "MASS"           # Robust regression
+  )
+  
+  # Machine learning packages
+  ml_packages <- c(
+    "randomForest",  # Random forest
+    "gbm",           # Gradient boosting
+    "caret"          # Model training and validation
+  )
+  
+  # Combine all packages
+  all_packages <- c(required_packages, viz_packages, stat_packages, ml_packages)
+  
+  # Install missing packages
+  new_packages <- all_packages[!(all_packages %in% installed.packages()[,"Package"])]
+  if(length(new_packages)) {
+    warning("Installing missing packages: ", paste(new_packages, collapse = ", "))
+    install.packages(new_packages)
+  }
+  
+  # Load packages
+  suppressPackageStartupMessages({
+    for(pkg in all_packages) {
+      library(pkg, character.only = TRUE)
+    }
+  })
+  
+  # Return package versions for documentation
+  pkg_versions <- sapply(all_packages, packageVersion)
+  return(pkg_versions)
+}
+
+# -----------------------------------------------------------------------------
+# 3. PROJECT PARAMETERS
+# -----------------------------------------------------------------------------
+
+# Project date range
+PROJECT_DATES <- list(
+  start_date = "2024-01-01",
+  end_date = "2024-12-31"
+)
+
+# API configuration
+API_CONFIG <- list(
+  weather = list(
+    base_url = "https://archive-api.open-meteo.com/v1/era5",
+    rate_limit_per_min = 60,
+    retry_delay_sec = 2,
+    max_retries = 3
+  ),
+  energy = list(
+    base_url = "https://api.eia.gov/v2/electricity/rto/daily-region-data/data/",
+    api_key_path = "config/eia_api_key.txt",
+    records_per_day = 500,
+    retry_delay_sec = 2,
+    max_retries = 3
+  )
+)
+
+# Project directory structure
+DIR_STRUCTURE <- list(
+  data = list(
+    raw = "data/raw",
+    processed = "data/processed",
+    backup = "data/backup"
+  ),
+  output = list(
+    figures = "output/figures",
+    interactive = "output/interactive"
+  ),
+  config = "config"
+)
+
+# -----------------------------------------------------------------------------
+# 4. UTILITY FUNCTIONS
+# -----------------------------------------------------------------------------
+
+# Function to create project directories
+create_project_dirs <- function() {
+  # Flatten the nested list
+  flatten_dirs <- function(dir_list, prefix = "") {
+    dirs <- character()
+    for (name in names(dir_list)) {
+      if (is.list(dir_list[[name]])) {
+        dirs <- c(dirs, flatten_dirs(dir_list[[name]], prefix = paste0(prefix, name, "/")))
+      } else {
+        dirs <- c(dirs, dir_list[[name]])
+      }
+    }
+    return(dirs)
+  }
+  
+  # Create all directories
+  dirs <- flatten_dirs(DIR_STRUCTURE)
+  for (dir in dirs) {
+    if (!dir.exists(dir)) {
+      dir.create(dir, recursive = TRUE, showWarnings = FALSE)
+      cat("Created directory:", dir, "\n")
+    }
+  }
+}
+
+# Function to load the EIA API key
+load_eia_api_key <- function() {
+  api_key_path <- API_CONFIG$energy$api_key_path
+  
+  # Check if key file exists
+  if (!file.exists(api_key_path)) {
+    warning("API key file not found: ", api_key_path)
+    
+    # Prompt for key
+    cat("Enter your EIA API key: ")
+    api_key <- readline()
+    
+    # Create directory if it doesn't exist
+    dir.create(dirname(api_key_path), showWarnings = FALSE, recursive = TRUE)
+    
+    # Save key for future use
+    writeLines(api_key, api_key_path)
+    cat("API key saved to:", api_key_path, "\n")
+  } else {
+    # Load existing key
+    api_key <- readLines(api_key_path, warn = FALSE)[1]
+  }
+  
+  # Validate key format
+  if (nchar(api_key) < 10) {
+    stop("Invalid API key format. Keys should be at least 10 characters.")
+  }
+  
+  return(api_key)
+}
+
+# Function to save data with both RDS and CSV formats
+save_dual_format <- function(data, base_path, filename) {
+  # Create full paths
+  rds_path <- file.path(base_path, paste0(filename, ".rds"))
+  csv_path <- file.path(base_path, paste0(filename, ".csv"))
+  
+  # Save in both formats
+  saveRDS(data, rds_path)
+  write_csv(data, csv_path)
+  
+  cat("Data saved to:", rds_path, "and", csv_path, "\n")
+}
+
+# Function to create timestamp-based backup filename
+create_backup_filename <- function(prefix) {
+  timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+  return(paste0(prefix, "_", timestamp))
+}
+
+# Function to check for missing values and report
+check_missing_values <- function(data, threshold_pct = 5) {
+  # Calculate missing percentage
+  missing_counts <- colSums(is.na(data))
+  missing_pct <- missing_counts / nrow(data) * 100
+  
+  # Create report
+  missing_report <- data.frame(
+    variable = names(missing_counts),
+    missing_count = missing_counts,
+    missing_percent = missing_pct,
+    exceeds_threshold = missing_pct > threshold_pct
+  ) %>%
+    arrange(desc(missing_percent))
+  
+  # Filter to variables with missing values
+  missing_report <- missing_report[missing_report$missing_count > 0, ]
+  
+  # Print summary
+  if (nrow(missing_report) > 0) {
+    cat("Warning: Missing values detected\n")
+    print(missing_report)
+    cat("Total variables with missing values:", nrow(missing_report), "\n")
+    cat("Variables exceeding threshold:", sum(missing_report$exceeds_threshold), "\n")
+  } else {
+    cat("No missing values detected.\n")
+  }
+  
+  return(missing_report)
+}
+
+# Function to detect outliers using standard deviations
+detect_outliers <- function(data, numeric_cols = NULL, threshold = 3) {
+  if (is.null(numeric_cols)) {
+    numeric_cols <- names(data)[sapply(data, is.numeric)]
+  }
+  
+  outlier_counts <- sapply(data[numeric_cols], function(x) {
+    z_scores <- scale(x)
+    return(sum(abs(z_scores) > threshold, na.rm = TRUE))
+  })
+  
+  outlier_report <- data.frame(
+    variable = names(outlier_counts),
+    outlier_count = outlier_counts,
+    outlier_pct = outlier_counts / length(data[[1]]) * 100
+  ) %>%
+    arrange(desc(outlier_count))
+  
+  # Filter to variables with outliers
+  outlier_report <- outlier_report[outlier_report$outlier_count > 0, ]
+  
+  return(outlier_report)
+}
+
+# Function to generate data quality report
+generate_data_quality_report <- function(data, filename = NULL) {
+  # Basic info
+  basic_info <- list(
+    rows = nrow(data),
+    columns = ncol(data),
+    memory_mb = format(object.size(data) / 1024^2, digits = 2),
+    timestamp = Sys.time()
+  )
+  
+  # Missing values
+  missing_report <- check_missing_values(data)
+  
+  # Outliers
+  outlier_report <- detect_outliers(data)
+  
+  # Column types summary
+  type_summary <- data.frame(
+    type = sapply(data, class),
+    count = 1
+  ) %>%
+    group_by(type) %>%
+    summarise(count = sum(count))
+  
+  # Create report object
+  quality_report <- list(
+    basic_info = basic_info,
+    missing_report = missing_report,
+    outlier_report = outlier_report,
+    type_summary = type_summary,
+    sample_data = head(data, 5)
+  )
+  
+  # Save if filename provided
+  if (!is.null(filename)) {
+    saveRDS(quality_report, filename)
+    cat("Data quality report saved to:", filename, "\n")
+  }
+  
+  return(quality_report)
+}
+
+# -----------------------------------------------------------------------------
+# 5. SESSION INITIALIZATION
+# -----------------------------------------------------------------------------
+
+# Initialize the project
+initialize_project <- function() {
+  # Create necessary directories
+  create_project_dirs()
+  
+  # Load required packages
+  pkg_versions <- load_required_packages()
+  
+  # Log session info
+  session_info <- sessionInfo()
+  session_info_file <- "session_info.txt"
+  capture.output(session_info, file = session_info_file)
+  
+  # Return initialization status
+  return(list(
+    status = "initialized",
+    timestamp = Sys.time(),
+    package_versions = pkg_versions,
+    session_info_path = session_info_file
+  ))
+}
+
+# Run initialization if this script is being sourced
+if (!interactive()) {
+  initialize_project()
+}
