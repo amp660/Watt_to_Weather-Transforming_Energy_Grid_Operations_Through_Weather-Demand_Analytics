@@ -1,0 +1,9 @@
+finding,mathematical_evidence,statistical_test
+U-Shaped Relationship,"Quadratic term coefficient = 548.15 (t=34.73, p<1.41e-254)",Multiple regression with quadratic term
+Optimal Temperature,51.5°F (95% CI: 50.8-52.2°F),"Bootstrapped confidence intervals (1,000 resamples)"
+Temperature Breakpoints,"Lower breakpoint: 37.7°F (95% CI: [36.7°F, 38.7°F]), Upper breakpoint: 59.3°F (95% CI: [58.2°F, 59.3°F])",Segmented regression analysis
+Regional Differences,Interaction F-value = 2310.8 (p<2.2e-16),ANOVA with region×temperature interaction
+ERCO Sensitivity,ERCO elasticity = 0.909 (2.0× higher than least sensitive region),Temperature elasticity estimation
+Seasonal Effect,Summer demand 26.5% higher than minimum season (p<1.73e-8),ANOVA with Tukey HSD post-hoc test
+Predictive Accuracy,Random Forest R² = 0.997 (93.1% improvement over linear model),Cross-validation on test dataset
+Economic Impact,"Each 1°F deviation from optimal temperature increases demand by 2.03%, rising to 3.06% for extreme deviations (>30°F)",Marginal effects analysis

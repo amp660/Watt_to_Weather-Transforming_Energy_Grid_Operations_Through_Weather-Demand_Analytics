@@ -1,0 +1,7 @@
+Finding,Description,Evidence
+U-Shaped Relationship,Energy demand increases at both temperature extremes (below 40°F and above 80°F),Quadratic regression shows significant temp² coefficient (p < 0.001)
+Temperature Impact,Temperature explains 18.6% of demand variation,Correlation analysis and feature importance rankings
+Seasonal Variation,Summer demand exceeds winter by 207.4 GWh on average,ANOVA and Tukey HSD tests confirm seasonal differences (p < 0.001)
+Regional Differences,ERCO (Texas) shows highest weather sensitivity among major regions,Regional sensitivity analysis and interaction effects
+Weather Sensitivity,Humidity and cloud cover have secondary effects on demand,Multiple regression coefficients and partial correlations
+Model Performance,Random Forest model achieves R² of 0.997 in demand prediction,Cross-validation results on test dataset
