@@ -826,6 +826,174 @@ print("Weather summary by location:")
 print(weather_summary)
 ```
 
+Data Quality Assessment - Post-Cleaning
+
+```{r}
+# Post-cleaning data quality assessment
+weather_clean %>%
+  skimr::skim() %>%
+  knitr::kable(caption = "Post-cleaning Data Quality Summary")
+
+# Compare data quality before and after cleaning
+quality_comparison <- data.frame(
+  Metric = c("Total Records", "Missing Values", "Derived Features", "Categorized Variables"),
+  Before = c(
+    nrow(weather_raw),
+    sum(is.na(weather_raw)),
+    0,  # No derived features in raw data
+    0   # No categorized variables in raw data
+  ),
+  After = c(
+    nrow(weather_clean),
+    sum(is.na(weather_clean)),
+    3,  # temperature_f, heat_index_f, and extreme weather flags
+    3   # precipitation_category, wind_category, weather_condition
+  )
+)
+
+knitr::kable(quality_comparison, caption = "Data Quality Improvement Summary")
+
+# Save quality comparison for GitHub tracking
+write_csv(quality_comparison, "data/processed/data_quality_comparison.csv")
+if (github_connected) {
+  commit_and_push_changes("Added data quality comparison metrics", 
+                         "data/processed/data_quality_comparison.csv")
+}
+```
+
+Creating Daily Weather Aggregates
+
+```{r}
+# Create daily weather aggregates
+weather_daily <- weather_clean %>%
+  group_by(location_name, city, state, date = as.Date(datetime_utc)) %>%
+  summarise(
+    latitude_deg = first(latitude_deg),
+    longitude_deg = first(longitude_deg),
+    
+    # Temperature statistics
+    avg_temp_f = mean(temperature_f, na.rm = TRUE),
+    max_temp_f = max(temperature_f, na.rm = TRUE),
+    min_temp_f = min(temperature_f, na.rm = TRUE),
+    avg_temp_c = mean(temperature_c, na.rm = TRUE),
+    max_temp_c = max(temperature_c, na.rm = TRUE),
+    min_temp_c = min(temperature_c, na.rm = TRUE),
+    temp_range_f = max_temp_f - min_temp_f,  # Daily temperature variation
+    
+    # Other weather metrics
+    avg_humidity = mean(humidity_pct, na.rm = TRUE),
+    total_precip = sum(precipitation_mm, na.rm = TRUE),
+    avg_wind_speed = mean(wind_speed_mps, na.rm = TRUE),
+    max_wind_speed = max(wind_speed_mps, na.rm = TRUE),
+    avg_cloud_cover = mean(cloud_cover_pct, na.rm = TRUE),
+    
+    # Extreme weather indicators
+    had_rain = as.integer(any(precipitation_mm > 0)),
+    had_heavy_rain = as.integer(any(precipitation_mm > 7.6)),
+    had_high_temp = as.integer(any(temperature_f >= 90)),
+    had_low_temp = as.integer(any(temperature_f <= 32)),
+    had_high_wind = as.integer(any(wind_speed_mps >= 10.8)),
+    
+    # Thermal comfort metrics (important for energy demand)
+    avg_heat_index_f = mean(heat_index_f, na.rm = TRUE),
+    max_heat_index_f = max(heat_index_f, na.rm = TRUE),
+    hours_over_80f = sum(temperature_f > 80, na.rm = TRUE),
+    hours_under_40f = sum(temperature_f < 40, na.rm = TRUE),
+    
+    .groups = 'drop'
+  ) %>%
+  # Add additional time-based features
+  mutate(
+    year = year(date),
+    month = month(date),
+    day = day(date),
+    weekday = wday(date, label = TRUE, abbr = TRUE),
+    
+    # Recreate season for the daily data
+    season = case_when(
+      month %in% c(12, 1, 2) ~ "Winter",
+      month %in% c(3, 4, 5) ~ "Spring",
+      month %in% c(6, 7, 8) ~ "Summer",
+      month %in% c(9, 10, 11) ~ "Fall"
+    ),
+    
+    # Add weather day type classification (useful for energy analysis)
+    weather_day_type = case_when(
+      had_high_temp == 1 & avg_humidity > 70 ~ "Hot and Humid",
+      had_high_temp == 1 ~ "Hot",
+      had_low_temp == 1 ~ "Cold",
+      total_precip > 10 ~ "Rainy",
+      avg_cloud_cover > 80 ~ "Cloudy",
+      TRUE ~ "Moderate"
+    )
+  )
+
+# Create backup of daily aggregated data
+daily_data_backup_file <- create_raw_data_backup(weather_daily, "weather_daily")
+cat(sprintf("Daily weather data backed up: %s\n", daily_data_backup_file))
+
+# Validate daily aggregation
+daily_validation <- weather_daily %>%
+  group_by(location_name) %>%
+  summarise(
+    days = n(),
+    expected_days = as.numeric(difftime(as.Date(end_date), as.Date(start_date), units = "days")) + 1,
+    completeness = days / expected_days,
+    .groups = 'drop'
+  )
+
+print("Daily data validation:")
+print(daily_validation)
+
+# Save the daily weather data
+saveRDS(weather_daily, "data/processed/weather_daily.rds")
+write_csv(weather_daily, "data/processed/weather_daily.csv")
+
+# Create a smaller sample of daily data for GitHub tracking
+weather_daily_sample <- weather_daily %>%
+  sample_n(min(100, nrow(.)))  # Use either 100 rows or all rows if fewer than 100
+
+# Save the sample file for GitHub tracking
+write_csv(weather_daily_sample, "data/processed/weather_daily_sample.csv")
+
+# Commit the daily data to GitHub
+if (github_connected) {
+  commit_and_push_changes(
+    commit_message = sprintf("Daily weather aggregation completed - %d days of data", nrow(weather_daily)),
+    files_to_add = "data/processed/weather_daily_sample.csv"
+  )
+}
+
+# Check the structure
+cat("Weather daily data structure:\n")
+str(weather_daily)
+cat(sprintf("\nTotal records in weather_daily: %d\n", nrow(weather_daily)))
+cat(sprintf("Date range: %s to %s\n", min(weather_daily$date), max(weather_daily$date)))
+cat(sprintf("Number of locations: %d\n", n_distinct(weather_daily$location_name)))
+
+# Create summary statistics for daily data
+daily_summary <- weather_daily %>%
+  group_by(season) %>%
+  summarise(
+    avg_temp_f = mean(avg_temp_f, na.rm = TRUE),
+    avg_daily_range = mean(temp_range_f, na.rm = TRUE),
+    avg_precip = mean(total_precip, na.rm = TRUE),
+    rainy_days_pct = mean(had_rain) * 100,
+    extreme_temp_days_pct = mean(had_high_temp | had_low_temp) * 100,
+    .groups = 'drop'
+  )
+
+# Save daily summary to CSV and commit
+write_csv(daily_summary, "data/processed/weather_daily_summary_by_season.csv")
+if (github_connected) {
+  commit_and_push_changes("Added daily weather summary by season", 
+                         "data/processed/weather_daily_summary_by_season.csv")
+}
+
+print("Daily weather summary by season:")
+print(daily_summary)
+```
+
 
 
 
