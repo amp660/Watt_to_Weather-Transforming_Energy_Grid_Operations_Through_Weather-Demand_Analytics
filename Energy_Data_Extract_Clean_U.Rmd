@@ -1,0 +1,1887 @@
+r---
+title: "Energy Data Retrieval and Processing"
+output: html_document
+date: "2025-05-04"
+author: "Student Name"
+---
+
+```{r setup, include=FALSE}
+Sys.setenv(EIA_API_KEY="insHTlefzLn0YPHrHiLKtZhkwUGA7JdhwB8PxntU")
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Project Overview and Data Source Documentation
+This script retrieves, processes, and analyzes energy data from the U.S. Energy Information Administration (EIA) API. The data will be merged with weather data in subsequent analysis to explore relationships between weather patterns and energy consumption.
+
+API Documentation:
+
+Source: U.S. Energy Information Administration (EIA) API v2
+Endpoint: https://api.eia.gov/v2/electricity/rto/daily-region-data/data/
+Data Coverage: Daily regional energy data including generation, demand, and interchange
+Key Parameters:
+api_key: Personal API key for authentication
+frequency: Data granularity (daily)
+data: Data fields to retrieve (values)
+start and end: Date range for data retrieval
+Rate Limits: 100,000 API calls per month, maximum 5,000 records per request
+Data Format: JSON response with array of energy metrics
+Access Requirements: Requires API key registration at https://www.eia.gov/opendata/
+
+```{r}
+# PROJECT SETUP AND LIBRARIES
+#################################
+
+# Set seed for reproducibility
+set.seed(42)
+
+# Install required packages if needed (commented to avoid reinstallation)
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(
+  tidyverse,   # Data manipulation and visualization
+  httr,        # API requests
+  jsonlite,    # JSON parsing
+  lubridate,   # Date/time manipulation
+  readxl,      # Excel file handling
+  plotly,      # Interactive plots
+  DT,          # Interactive tables
+  corrplot,    # Correlation plots
+  skimr,       # Summary statistics
+  ggpubr,      # Publication-ready plots
+  scales,      # Scale formatting
+  viridis,     # Color palettes
+  patchwork,   # Combining plots
+  janitor,     # Data cleaning utilities
+  usethis,     # Development utilities and GitHub integration
+  digest       # For creating hash values
+)
+
+# Record package versions for reproducibility
+pkg_list <- c("tidyverse", "httr", "jsonlite", "lubridate", "readxl", "plotly", 
+  "DT", "corrplot", "skimr", "ggpubr", "scales", "viridis", "patchwork", "janitor", "usethis", "digest")
+
+pkg_versions <- lapply(pkg_list, packageVersion)
+names(pkg_versions) <- pkg_list
+
+# To get a more readable output, convert to character vector
+pkg_versions_char <- sapply(pkg_versions, as.character)
+
+# Set working directory and create project structure
+dir.create("data", showWarnings = FALSE)
+dir.create("data/raw", showWarnings = FALSE)
+dir.create("data/processed", showWarnings = FALSE)
+dir.create("output", showWarnings = FALSE)
+dir.create("output/figures", showWarnings = FALSE)
+dir.create("data/backup", showWarnings = FALSE) # Dedicated backup directory
+dir.create("data/backup/raw_snapshots", showWarnings = FALSE)
+
+# GITHUB CONNECTION SETUP
+##################################################
+
+# Define your GitHub repository URL 
+github_repo_url <- "https://github.com/amp660/Data_Wrangling_Data_Backups"  # Replace with your actual GitHub repo URL
+github_connected <- FALSE  # Initialize connection status
+
+# Function to commit and push changes to GitHub
+commit_and_push_changes <- function(commit_message, files_to_add = ".", push = TRUE) {
+  tryCatch({
+    # Stage the specified files
+    cat(sprintf("Adding files to Git staging: %s\n", files_to_add))
+    system(paste0("git add ", files_to_add))
+    
+    # Create a commit with the provided message
+    commit_cmd <- paste0('git commit -m "', commit_message, '"')
+    commit_result <- system(commit_cmd, intern = TRUE)
+    cat("Changes committed to Git repository:\n")
+    cat(paste(commit_result, collapse = "\n"), "\n\n")
+    
+    # Push to GitHub if requested
+    if (push) {
+      cat("Pushing changes to GitHub repository...\n")
+      
+      # First try to pull any remote changes to avoid conflicts
+      cat("Checking for remote changes first...\n")
+      pull_result <- tryCatch({
+        system("git pull --rebase origin main", intern = TRUE)
+      }, error = function(e) {
+        cat("Warning: Could not pull from remote. Will try to force push.\n")
+        return(NULL)
+      })
+      
+      # Now push the changes
+      push_result <- tryCatch({
+        system("git push origin main", intern = TRUE)
+      }, error = function(e) {
+        # If regular push fails, try to resolve with a pull and merge
+        cat("Push failed. Attempting to resolve conflicts...\n")
+        system("git pull origin main --allow-unrelated-histories", intern = TRUE)
+        # Try pushing again after the merge
+        result <- system("git push origin main", intern = TRUE)
+        return(result)
+      })
+      
+      cat("Changes pushed to GitHub successfully!\n")
+      if (!is.null(push_result)) {
+        cat(paste(push_result, collapse = "\n"), "\n\n")
+      }
+    }
+    
+    return(TRUE)
+  }, error = function(e) {
+    cat("WARNING: Failed to commit or push changes to GitHub.\n")
+    cat("Error message:", e$message, "\n")
+    cat("You may need to manually resolve conflicts or force push:\n")
+    cat("git pull --allow-unrelated-histories origin main\n")
+    cat("git push -f origin main  # Use with caution, this will overwrite remote changes\n")
+    return(FALSE)
+  })
+}
+
+# Function to connect to GitHub repository
+connect_to_github <- function(repo_url) {
+  tryCatch({
+    # Check if git is installed
+    git_version <- system("git --version", intern = TRUE)
+    cat("Git detected:", git_version, "\n")
+    
+    # Initialize Git repository if not already done
+    if (!file.exists(".git")) {
+      cat("Initializing local Git repository...\n")
+      system("git init")
+      
+      # Create .gitignore file
+      writeLines(
+        c(
+          "# R specific files",
+          ".Rhistory",
+          ".RData",
+          ".Rproj.user/",
+          "*.Rproj",
+          "",
+          "# Large data files",
+          "data/raw/*.csv",
+          "data/raw/*.rds",
+          "data/backup/raw_snapshots/*.rds",
+          "",
+          "# Sensitive information",
+          "credentials.R",
+          "api_keys.txt",
+          "config/*.txt",   # Added for EIA API keys
+          "",
+          "# Temporary files",
+          "tmp/",
+          "temp/",
+          "*.tmp",
+          "",
+          "# System files",
+          ".DS_Store",
+          "Thumbs.db"
+        ),
+        ".gitignore"
+      )
+      cat("Created .gitignore file for managing tracked files.\n")
+    } else {
+      cat("Git repository already initialized.\n")
+    }
+    
+    # Check if remote is already configured
+    remote_exists <- tryCatch({
+      remote_check <- system("git remote -v", intern = TRUE)
+      grepl("origin", paste(remote_check, collapse = " "))
+    }, error = function(e) {
+      return(FALSE)
+    })
+    
+    if (!remote_exists) {
+      # Configure the remote repository
+      cat("Connecting to remote GitHub repository:", repo_url, "\n")
+      system(paste0("git remote add origin ", repo_url))
+      cat("Remote repository connected successfully.\n")
+      
+      # Configure basic Git settings if not already set
+      user_name <- system("git config user.name", intern = TRUE)
+      user_email <- system("git config user.email", intern = TRUE)
+      
+      if (length(user_name) == 0 || length(user_email) == 0) {
+        cat("\nGit user settings not configured. You should set them with:\n")
+        cat("git config --global user.name \"Your Name\"\n")
+        cat("git config --global user.email \"your.email@example.com\"\n\n")
+      }
+    } else {
+      # Remote already exists, get the URL
+      remote_url <- system("git remote get-url origin", intern = TRUE)
+      cat("GitHub repository already connected to:", remote_url, "\n")
+      
+      if (remote_url != repo_url) {
+        cat("NOTE: Current remote URL differs from specified URL.\n")
+        cat("To update the remote URL, use:\n")
+        cat(paste0("git remote set-url origin ", repo_url, "\n\n"))
+      }
+    }
+    
+    # Try to pull from remote first to integrate any existing remote content
+    tryCatch({
+      cat("Pulling any existing remote content...\n")
+      system("git pull origin main --allow-unrelated-histories", intern = TRUE)
+    }, error = function(e) {
+      cat("Note: Could not pull from remote. This is normal for new repositories.\n")
+    })
+    
+    # Instructions for pushing to GitHub
+    cat("\nTo push your changes to GitHub, use these commands:\n")
+    cat("1. Add files to staging: git add .\n")
+    cat("2. Commit changes: git commit -m \"Your commit message\"\n")
+    cat("3. Push to GitHub: git push -u origin main\n\n")
+    
+    # Create initial commit if repository is new
+    commit_history <- tryCatch({
+      system("git log -1", intern = TRUE)
+      TRUE
+    }, error = function(e) {
+      FALSE
+    })
+    
+    if (!commit_history) {
+      cat("Creating initial commit to prepare for pushing to GitHub...\n")
+      system("git add README.md .gitignore")
+      system('git commit -m "Initial commit with Energy data project structure"')
+      cat("Initial commit created. Ready to push to GitHub.\n")
+      
+      # Try to push the initial commit
+      tryCatch({
+        system("git push -u origin main")
+        cat("Initial commit pushed to GitHub.\n")
+      }, error = function(e) {
+        cat("Could not push initial commit. You may need to do this manually.\n")
+      })
+    }
+    
+    return(TRUE)
+  }, error = function(e) {
+    cat("ERROR: Failed to connect to GitHub repository.\n")
+    cat("Error message:", e$message, "\n")
+    cat("Please ensure Git is installed and you have the necessary permissions.\n")
+    return(FALSE)
+  })
+}
+
+# Function to create timestamped backup of raw data and optionally commit to GitHub
+create_raw_data_backup <- function(data, prefix = "energy_data", commit_to_git = TRUE) {
+  # Create a timestamped filename
+  timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+  backup_filename <- paste0("data/backup/raw_snapshots/", prefix, "_", timestamp, ".rds")
+  
+  # Save the full data to local backup
+  saveRDS(data, file = backup_filename)
+  
+  # Create a smaller version of the data for Git tracking (summary statistics)
+  if (commit_to_git && github_connected && nrow(data) > 0) {
+    # Create a summary file that's small enough to track in Git
+    data_summary <- data %>%
+      summarise(
+        records = n(),
+        timestamp = Sys.time(),
+        columns = ncol(.),
+        missing_values = sum(is.na(.)),
+        data_hash = digest::digest(., algo = "md5")
+      )
+    
+    # Save summary to a tracked location
+    summary_filename <- paste0("data/processed/", prefix, "_summary.csv")
+    write_csv(data_summary, summary_filename)
+    
+    # Commit the change with appropriate message
+    commit_message <- sprintf("Updated %s - %d records on %s", 
+                             prefix, nrow(data), Sys.Date())
+    commit_and_push_changes(commit_message, files_to_add = summary_filename)
+  }
+  
+  return(backup_filename)
+}
+
+# Connect to GitHub repository
+github_connected <- connect_to_github(github_repo_url)
+
+if (github_connected) {
+  cat("GitHub repository setup completed successfully.\n")
+  
+  # Add a note to the README about GitHub repository
+  if (file.exists("README.md")) {
+    readme_content <- readLines("README.md")
+    if (!any(grepl("GitHub Repository", readme_content))) {
+      github_info <- c(
+        "",
+        "## GitHub Repository",
+        paste0("This project is version controlled using Git and hosted on GitHub at: ", github_repo_url),
+        "To contribute or download the latest version, please visit the repository.",
+        ""
+      )
+      writeLines(c(readme_content, github_info), "README.md")
+      cat("README.md updated with GitHub repository information.\n")
+    }
+  }
+}
+
+# Create README file with project documentation if it doesn't exist
+if (!file.exists("README.md")) {
+  readme_content <- c(
+    "# Energy Data Retrieval and Processing Project",
+    "",
+    "## Overview",
+    "This project retrieves, processes, and analyzes energy data from the U.S. Energy Information Administration (EIA) API.",
+    "",
+    "## Data Sources",
+    "- U.S. Energy Information Administration (EIA) API v2",
+    "- Daily regional energy data including generation, demand, and interchange",
+    "",
+    "## Directory Structure",
+    "- `data/raw/`: Raw data retrieved from API",
+    "- `data/processed/`: Cleaned and transformed data",
+    "- `data/backup/`: Backups of raw datasets at different stages",
+    "- `output/figures/`: Generated visualizations",
+    "",
+    "## Version Control",
+    "This project uses Git for version control with regular commits after significant changes.",
+    "Large data files are stored separately and backed up to cloud storage.",
+    "",
+    sprintf("## Last Updated: %s", Sys.Date())
+  )
+  writeLines(readme_content, "README.md")
+  cat("Created README.md file with project documentation.\n")
+  
+  # Commit the README if GitHub is connected
+  if (github_connected) {
+    commit_and_push_changes("Initial README with Energy data project documentation", "README.md")
+  }
+}
+
+# DEFINE DATE RANGE FOR THE PROJECT
+start_date <- "2024-01-01"
+end_date <- "2024-12-31"
+```
+
+
+API Key Management and Secure Configuration
+
+```{r}
+# API KEY MANAGEMENT
+#################################
+
+# Function to safely load API key
+load_api_key <- function(key_file = "config/eia_api_key.txt", env_var = "EIA_API_KEY") {
+  # First, try to read from config file
+  if (file.exists(key_file)) {
+    key <- trimws(readLines(key_file, warn = FALSE)[1])
+    if (nchar(key) > 0) {
+      return(key)
+    }
+  }
+  
+  # If file doesn't exist or is empty, try environment variable
+  if (Sys.getenv(env_var) != "") {
+    return(Sys.getenv(env_var))
+  }
+  
+  # Fallback: ask user for key (not recommended for automated scripts)
+  cat("No API key found. Please enter your EIA API key:\n")
+  key <- readline(prompt = "API Key: ")
+  
+  # Create config directory if it doesn't exist
+  dir.create("config", showWarnings = FALSE)
+  
+  # Save for future use (with permission)
+  save_response <- readline(prompt = "Save this API key for future use? (y/n): ")
+  if (tolower(save_response) == "y") {
+    writeLines(key, key_file)
+    cat("API key saved to:", key_file, "\n")
+    
+    # Add entry to .gitignore to ensure API keys are not tracked
+    if (file.exists(".gitignore")) {
+      gitignore_content <- readLines(".gitignore")
+      if (!any(grepl("config/eia_api_key.txt", gitignore_content))) {
+        writeLines(c(gitignore_content, "", "# EIA API Key", "config/eia_api_key.txt"), ".gitignore")
+        cat("Added API key file to .gitignore for security.\n")
+      }
+    }
+  }
+  
+  return(key)
+}
+
+# Load the EIA API key
+eia_api_key <- load_api_key()
+
+# Validate API key presence
+if (is.null(eia_api_key) || nchar(eia_api_key) < 10) {
+  stop("Valid EIA API key is required. Please obtain one at https://www.eia.gov/opendata/")
+}
+
+# Mask API key in output for security
+masked_key <- paste0(substr(eia_api_key, 1, 4), "...", substr(eia_api_key, nchar(eia_api_key) - 3, nchar(eia_api_key)))
+cat("Using EIA API key:", masked_key, "\n")
+
+# Record API access in GitHub without exposing key
+if (github_connected) {
+  api_log_entry <- sprintf("EIA API access configured on %s", Sys.Date())
+  writeLines(api_log_entry, "data/processed/api_access_log.txt")
+  commit_and_push_changes("Updated API access log", "data/processed/api_access_log.txt")
+}
+```
+
+
+Data Retrieval Functions
+
+```{r}
+# DATA RETRIEVAL FUNCTIONS
+#################################
+
+# Function to fetch limited records per day with improved error handling
+fetch_daily_limited_energy_data <- function(api_key, start_date, end_date, records_per_day = 500,
+                                            max_retries = 3, retry_delay = 2) {
+  base_url <- "https://api.eia.gov/v2/electricity/rto/daily-region-data/data/"
+  
+  # Validate inputs
+  if (is.null(api_key) || nchar(api_key) < 10) {
+    stop("Valid API key is required")
+  }
+  
+  if (!is.character(start_date) || !is.character(end_date)) {
+    stop("Start and end dates must be character strings in YYYY-MM-DD format")
+  }
+  
+  # Convert dates to Date objects with validation
+  tryCatch({
+    start_date_obj <- as.Date(start_date)
+    end_date_obj <- as.Date(end_date)
+    
+    if (is.na(start_date_obj) || is.na(end_date_obj)) {
+      stop("Invalid date format. Please use YYYY-MM-DD format.")
+    }
+    
+    if (start_date_obj > end_date_obj) {
+      stop("Start date must be before or equal to end date")
+    }
+  }, error = function(e) {
+    stop(paste("Date validation error:", e$message))
+  })
+  
+  # Create sequence of individual days
+  date_sequence <- seq(start_date_obj, end_date_obj, by = "day")
+  
+  all_data <- list()
+  
+  cat(sprintf("\nFetching %d records per day from %s to %s...\n",
+               records_per_day, start_date, end_date))
+  cat(sprintf("Total days to process: %d\n\n", length(date_sequence)))
+  
+  # Initialize progress tracking
+  total_records <- 0
+  successful_days <- 0
+  failed_days <- 0
+  
+  # Process each day
+  for (i in seq_along(date_sequence)) {
+    current_date <- as.character(date_sequence[i])
+    
+    cat(sprintf("Processing day %d/%d: %s\n", i, length(date_sequence), current_date))
+    
+    # Fetch data for this specific day with retry mechanism
+    day_data <- NULL
+    retries <- 0
+    
+    while (is.null(day_data) && retries <= max_retries) {
+      if (retries > 0) {
+        cat(sprintf("  Retry attempt %d/%d...\n", retries, max_retries))
+        Sys.sleep(retry_delay)
+      }
+      
+      # Fetch data for this specific day
+      day_data <- tryCatch({
+        fetch_limited_day_data(api_key, current_date, records_per_day)
+      }, error = function(e) {
+        cat(sprintf("  Error: %s\n", e$message))
+        return(NULL)
+      })
+      
+      retries <- retries + 1
+    }
+    
+    if (!is.null(day_data) && nrow(day_data) > 0) {
+      all_data[[i]] <- day_data
+      total_records <- total_records + nrow(day_data)
+      successful_days <- successful_days + 1
+      cat(sprintf("  Retrieved %d records for %s\n", nrow(day_data), current_date))
+      
+      # Save raw data backup for this day
+      backup_file <- paste0("data/backup/energy_raw_",
+                            format(as.Date(current_date), "%Y%m%d"),
+                           ".rds")
+      saveRDS(day_data, backup_file)
+      
+    } else {
+      failed_days <- failed_days + 1
+      cat(sprintf("  No data available for %s after %d attempts\n",
+                   current_date, retries - 1))
+    }
+    
+    # Brief pause between requests to respect API rate limits
+    Sys.sleep(0.5)
+  }
+  
+  # Combine all daily data
+  if (length(all_data) > 0) {
+    combined_data <- bind_rows(all_data)
+    cat(sprintf("\nData retrieval summary:\n"))
+    cat(sprintf("- Total records retrieved: %d\n", total_records))
+    cat(sprintf("- Successful days: %d/%d (%.1f%%)\n",
+                 successful_days, length(date_sequence),
+                 100 * successful_days / length(date_sequence)))
+    cat(sprintf("- Failed days: %d/%d\n", failed_days, length(date_sequence)))
+    
+    # Show summary by date
+    if (nrow(combined_data) > 0) {
+      date_summary <- combined_data %>%
+        group_by(period) %>%
+        summarise(records = n()) %>%
+        arrange(period)
+      
+      cat("\nRecords per date:\n")
+      print(date_summary, n = 10)
+      if (nrow(date_summary) > 10) {
+        cat(sprintf("... (%d more dates)\n", nrow(date_summary) - 10))
+      }
+    }
+    
+    return(combined_data)
+  } else {
+    stop("No data retrieved for the specified date range")
+  }
+}
+
+# Helper function to fetch limited data for a single day
+fetch_limited_day_data <- function(api_key, date, max_records = 500) {
+  base_url <- "https://api.eia.gov/v2/electricity/rto/daily-region-data/data/"
+  
+  # First, get total count for the day
+  count_url <- paste0(
+    base_url,
+    "?api_key=", api_key,
+    "&frequency=daily",
+    "&data[0]=value",
+    "&start=", date,
+    "&end=", date,
+    "&length=1"
+  )
+  
+  # Get total available records for this day
+  response <- GET(count_url)
+  total_available <- 0
+  
+  if (status_code(response) == 200) {
+    json_text <- content(response, "text", encoding = "UTF-8")
+    data <- fromJSON(json_text)
+    if (!is.null(data$response$total)) {
+      # Convert to numeric, handling potential character input
+      total_available <- as.numeric(data$response$total)
+      cat(sprintf("  Total available records for %s: %d\n", date, total_available))
+    }
+  } else {
+    stop(sprintf("API request failed with status code: %d", status_code(response)))
+  }
+  
+  if (total_available == 0) {
+    return(NULL)
+  }
+  
+  # If total available is less than max_records, get all
+  if (total_available <= max_records) {
+    query_url <- paste0(
+      base_url,
+      "?api_key=", api_key,
+      "&frequency=daily",
+      "&data[0]=value",
+      "&start=", date,
+      "&end=", date,
+      "&sort[0][column]=period",
+      "&sort[0][direction]=asc",
+      "&length=", total_available
+    )
+    
+    response <- GET(query_url)
+    
+    if (status_code(response) == 200) {
+      json_text <- content(response, "text", encoding = "UTF-8")
+      data <- fromJSON(json_text)
+      
+      if (!is.null(data$response$data) && nrow(data$response$data) > 0) {
+        return(as_tibble(data$response$data))
+      }
+    } else {
+      stop(sprintf("Failed to retrieve data: %s", status_code(response)))
+    }
+    return(NULL)
+  }
+  
+  # If more records available than needed, fetch using pagination
+  all_day_data <- list()
+  offset <- 0
+  page_size <- 5000  # Maximum EIA API page size
+  
+  # Fetch all records for the day in batches
+  while (offset < total_available) {
+    query_url <- paste0(
+      base_url,
+      "?api_key=", api_key,
+      "&frequency=daily",
+      "&data[0]=value",
+      "&start=", date,
+      "&end=", date,
+      "&sort[0][column]=period",
+      "&sort[0][direction]=asc",
+      "&offset=", offset,
+      "&length=", page_size
+    )
+    
+    response <- GET(query_url)
+    
+    if (status_code(response) == 200) {
+      json_text <- content(response, "text", encoding = "UTF-8")
+      data <- fromJSON(json_text)
+      
+      if (!is.null(data$response$data) && nrow(data$response$data) > 0) {
+        page_data <- as_tibble(data$response$data)
+        all_day_data[[length(all_day_data) + 1]] <- page_data
+        
+        rows_retrieved <- nrow(page_data)
+        offset <- offset + rows_retrieved
+        
+        cat(sprintf("  Retrieved page: %d records (offset %d)\n",
+                     rows_retrieved, offset - rows_retrieved))
+        
+        if (rows_retrieved < page_size) {
+          break
+        }
+      } else {
+        break
+      }
+    } else {
+      stop(sprintf("Pagination failed with status: %d", status_code(response)))
+    }
+    
+    # Respect API rate limits
+    Sys.sleep(0.3)
+  }
+  
+  # Combine all data for the day
+  if (length(all_day_data) > 0) {
+    full_day_data <- bind_rows(all_day_data)
+    
+    # Sample randomly if more records than requested
+    if (nrow(full_day_data) > max_records) {
+      # Use stratified sampling to ensure representation across types
+      if ("type" %in% names(full_day_data)) {
+        sampled_data <- full_day_data %>%
+          group_by(type) %>%
+          sample_frac(size = min(1, max_records / nrow(full_day_data))) %>%
+          ungroup()
+        
+        # If still too many, take random sample
+        if (nrow(sampled_data) > max_records) {
+          set.seed(123)  # For reproducibility
+          sampled_data <- sampled_data %>%
+            sample_n(max_records)
+        }
+      } else {
+        # Simple random sampling if no type column
+        set.seed(123)  # For reproducibility
+        sampled_data <- full_day_data %>%
+          sample_n(max_records)
+      }
+      
+      cat(sprintf("  Sampled %d records from %d available\n",
+                   nrow(sampled_data), nrow(full_day_data)))
+      
+      return(sampled_data)
+    } else {
+      return(full_day_data)
+    }
+  }
+  
+  return(NULL)
+}
+
+# Execute the data fetching with error handling
+tryCatch({
+  # Try to load previously saved data first to avoid unnecessary API calls
+  if (file.exists("data/raw/energy_raw_sampled.rds")) {
+    last_modified <- file.info("data/raw/energy_raw_sampled.rds")$mtime
+    days_old <- as.numeric(difftime(Sys.time(), last_modified, units = "days"))
+    
+    if (days_old < 7) {  # Data is less than 7 days old
+      cat(sprintf("Loading cached energy data from %s (%.1f days old)\n",
+                   format(last_modified), days_old))
+      energy_raw <- readRDS("data/raw/energy_raw_sampled.rds")
+      
+      # Check if data needs refreshing
+      refresh_data <- readline(prompt = "Use cached data? Enter 'n' to refresh from API, any other key to continue: ")
+      if (tolower(refresh_data) == "n") {
+        cat("Refreshing data from API...\n")
+        energy_raw <- fetch_daily_limited_energy_data(eia_api_key, start_date, end_date, records_per_day = 500)
+      }
+    } else {
+      cat("Cached data is older than 7 days. Refreshing from API...\n")
+      energy_raw <- fetch_daily_limited_energy_data(eia_api_key, start_date, end_date, records_per_day = 500)
+    }
+  } else {
+    cat("No cached data found. Retrieving from API...\n")
+    energy_raw <- fetch_daily_limited_energy_data(eia_api_key, start_date, end_date, records_per_day = 500)
+  }
+  
+  # Save the results
+  if (!is.null(energy_raw)) {
+    saveRDS(energy_raw, "data/raw/energy_raw_sampled.rds")
+    write_csv(energy_raw, "data/raw/energy_raw_sampled.csv")
+    
+    # Create backup of the raw dataset
+    energy_raw_backup_file <- create_raw_data_backup(energy_raw, "energy_raw")
+    cat(sprintf("Raw energy data backed up to: %s\n", energy_raw_backup_file))
+    
+    # Create a data summary file for GitHub tracking
+    if (github_connected) {
+      # Create a small sample for GitHub tracking
+      set.seed(42)  # Ensure reproducible sampling
+      energy_sample <- energy_raw %>%
+        group_by(respondent) %>%
+        sample_n(min(10, n())) %>%  # 10 records per respondent or fewer if not available
+        ungroup()
+      
+      # Save sample data file
+      write_csv(energy_sample, "data/processed/energy_raw_sample.csv")
+      
+      # Commit and push the sample data file
+      commit_and_push_changes("Initial data retrieval from EIA API - raw energy data sample", 
+                            files_to_add = "data/processed/energy_raw_sample.csv")
+    }
+    
+    # Create a summary report
+    cat("\n=== Data Collection Summary ===\n")
+    cat(sprintf("Total records: %d\n", nrow(energy_raw)))
+    
+    # Records by date
+    if ("period" %in% names(energy_raw)) {
+      by_date <- energy_raw %>%
+        count(period, name = "records") %>%
+        arrange(period)
+      
+      cat(sprintf("Date range: %s to %s\n",
+                   min(by_date$period), max(by_date$period)))
+      cat(sprintf("Average records per day: %.1f\n",
+                   mean(by_date$records)))
+      
+      # Save date summary to GitHub if connected
+      if (github_connected) {
+        write_csv(by_date, "data/processed/energy_date_summary.csv")
+        commit_and_push_changes("Added energy data summary by date", 
+                              "data/processed/energy_date_summary.csv")
+      }
+    }
+    
+    # Records by respondent
+    if ("respondent" %in% names(energy_raw)) {
+      by_respondent <- energy_raw %>%
+        count(respondent, sort = TRUE)
+      
+      cat("\nTop 5 respondents by record count:\n")
+      print(head(by_respondent, 5))
+      
+      # Save respondent summary to GitHub if connected
+      if (github_connected) {
+        write_csv(head(by_respondent, 20), "data/processed/energy_top_respondents.csv")
+        commit_and_push_changes("Added top energy respondents summary", 
+                               "data/processed/energy_top_respondents.csv")
+      }
+    }
+    
+    # Records by type
+    if ("type" %in% names(energy_raw)) {
+      by_type <- energy_raw %>%
+        count(type, sort = TRUE)
+      
+      cat("\nRecords by type:\n")
+      print(by_type)
+      
+      # Save type summary to GitHub if connected
+      if (github_connected) {
+        write_csv(by_type, "data/processed/energy_type_summary.csv")
+        commit_and_push_changes("Added energy data summary by type", 
+                               "data/processed/energy_type_summary.csv")
+      }
+    }
+  }
+}, error = function(e) {
+  cat(sprintf("\nERROR: %s\n", e$message))
+  
+  # Try to load backup data if available
+  if (file.exists("data/raw/energy_raw_sampled.rds")) {
+    cat("Attempting to load backup data...\n")
+    energy_raw <- readRDS("data/raw/energy_raw_sampled.rds")
+    cat(sprintf("Loaded backup data with %d records\n", nrow(energy_raw)))
+  } else {
+    stop("No backup data available. Cannot proceed with analysis.")
+  }
+})
+```
+
+Data Exploration - Raw Data
+
+```{r}
+# Explore the raw data structure
+str(energy_raw)
+
+# Initial data quality assessment
+energy_raw %>%
+  skimr::skim() %>%
+  knitr::kable(caption = "Raw Energy Data Quality Summary")
+
+# Check for missing values in raw data
+missing_raw <- energy_raw %>%
+  summarise(across(everything(), ~sum(is.na(.))))
+
+cat("Missing values in raw energy data:\n")
+print(missing_raw)
+
+# Visualize raw data distribution
+if ("value" %in% names(energy_raw)) {
+  # Convert value to numeric first
+  energy_raw <- energy_raw %>%
+    mutate(value_numeric = as.numeric(value))
+  
+  # Create histogram for basic distribution
+  value_dist <- ggplot(energy_raw, aes(x = value_numeric)) +
+    geom_histogram(bins = 50, fill = "steelblue", alpha = 0.7) +
+    scale_x_log10(labels = scales::comma) +
+    labs(
+      title = "Distribution of Energy Values (Raw Data)",
+      subtitle = "Log scale used due to wide value range",
+      x = "Energy Value (Log Scale)",
+      y = "Count"
+    ) +
+    theme_minimal()
+  
+  print(value_dist)
+  ggsave("output/figures/raw_energy_distribution.png", value_dist, width = 10, height = 6, dpi = 300)
+  
+  # Commit visualization to GitHub
+  if (github_connected) {
+    commit_and_push_changes("Added raw energy distribution visualization", 
+                           "output/figures/raw_energy_distribution.png")
+  }
+}
+```
+
+Data Cleaning and Transformation
+
+```{r}
+# DATA CLEANING AND ENRICHMENT - ENERGY DATA
+##################################################
+
+# Load the raw energy data (if not already in memory)
+if(!exists("energy_raw")) {
+  energy_raw <- readRDS("data/raw/energy_raw_sampled.rds")
+  cat("Loaded energy data from file\n")
+} else {
+  cat("Using energy data from API retrieval\n")
+}
+
+# Create backup of raw data before cleaning
+raw_data_backup_file <- create_raw_data_backup(energy_raw, "energy_raw_before_cleaning")
+cat(sprintf("Raw energy data backed up before cleaning: %s\n", raw_data_backup_file))
+
+# Clean and transform energy data
+energy_clean <- energy_raw %>%
+  # Remove exact duplicate rows if any
+  # Explanation: Duplicates can occur from API responses and create bias in analysis
+  distinct() %>%
+  
+  # Rename columns for clarity and consistency
+  # Explanation: Clear, descriptive column names improve code readability and documentation
+  rename(
+    date = period,
+    company_code = respondent,
+    company_name = `respondent-name`,
+    measurement_type = type,
+    measurement_name = `type-name`,
+    timezone = timezone,
+    timezone_desc = `timezone-description`,
+    value = value,
+    units = `value-units`
+  ) %>%
+  
+  # Convert value to numeric (it's currently character)
+  # Explanation: Numeric conversion is essential for calculations
+  mutate(
+    value_numeric = as.numeric(value),
+    
+    # Flag records where numeric conversion failed
+    value_conversion_failed = is.na(value_numeric) & !is.na(value)
+  ) %>%
+  
+  # Convert date to proper date format
+  # Explanation: Standardized date format enables time-based analysis
+  mutate(
+    date = as.Date(date),
+    year = year(date),
+    month = month(date),
+    day = day(date),
+    weekday = wday(date, label = TRUE, abbr = TRUE),
+    
+    # Create season for seasonal analysis
+    # Explanation: Seasons are key for understanding energy patterns
+    season = case_when(
+      month %in% c(12, 1, 2) ~ "Winter",
+      month %in% c(3, 4, 5) ~ "Spring", 
+      month %in% c(6, 7, 8) ~ "Summer",
+      month %in% c(9, 10, 11) ~ "Fall"
+    ),
+    
+    # Create quarter for quarterly reporting
+    quarter = paste0("Q", quarter(date))
+  ) %>%
+  
+  # Standardize measurement types
+  # Explanation: Categorization simplifies analysis of similar measurements
+  mutate(
+    measurement_category = case_when(
+      measurement_type %in% c("NG", "D") ~ "Generation",
+      measurement_type %in% c("DF", "DA") ~ "Demand",
+      measurement_type %in% c("TI") ~ "Interchange",
+      TRUE ~ "Other"
+    ),
+    
+    # Create more detailed subcategories
+    # Explanation: Finer-grained classification for specialized analysis
+    measurement_subcategory = case_when(
+      measurement_type == "NG" ~ "Net Generation",
+      measurement_type == "D" ~ "Generation",
+      measurement_type == "DF" ~ "Demand Forecast",
+      measurement_type == "DA" ~ "Demand Actual",
+      measurement_type == "TI" ~ "Total Interchange",
+      TRUE ~ "Other"
+    )
+  ) %>%
+  
+  # Extract state from company name using regex patterns
+  # Explanation: State extraction enables geographic analysis and weather mapping
+  mutate(
+    state = case_when(
+      str_detect(company_name, "Florida|FPL") ~ "FL",
+      str_detect(company_name, "California|PG&E|SCE|San Diego") ~ "CA",
+      str_detect(company_name, "Texas|ERCOT") ~ "TX",
+      str_detect(company_name, "New York|NYISO") ~ "NY",
+      str_detect(company_name, "Arizona|APS|SRP") ~ "AZ",
+      str_detect(company_name, "Washington|Seattle|Puget") ~ "WA",
+      str_detect(company_name, "Georgia|Southern Company") ~ "GA",
+      str_detect(company_name, "Illinois|ComEd") ~ "IL",
+      str_detect(company_name, "Ohio|AEP|FirstEnergy") ~ "OH",
+      str_detect(company_name, "Pennsylvania|PECO|PPL") ~ "PA",
+      str_detect(company_name, "Massachusetts|Eversource") ~ "MA",
+      str_detect(company_name, "Michigan|DTE|Consumers") ~ "MI",
+      str_detect(company_name, "Virginia|Dominion") ~ "VA",
+      str_detect(company_name, "North Carolina|Duke") ~ "NC",
+      str_detect(company_name, "Colorado|Xcel") ~ "CO",
+      str_detect(company_name, "Wisconsin|WEC") ~ "WI",
+      str_detect(company_name, "Oregon|Portland") ~ "OR",
+      str_detect(company_name, "Tennessee|TVA") ~ "TN",
+      str_detect(company_name, "New Jersey|PSEG") ~ "NJ",
+      str_detect(company_name, "Maryland|BGE") ~ "MD",
+      TRUE ~ NA_character_
+    ),
+    
+    # Extract region from company name/code
+    # Explanation: Energy markets operate in regional interconnections
+    region = case_when(
+      str_detect(company_code, "ERCO|TRE") ~ "Texas",
+      str_detect(company_code, "CISO|BANC|LDWP") ~ "California",
+      str_detect(company_code, "NYIS") ~ "New York",
+      str_detect(company_code, "FRCC|FPC|FPL") ~ "Florida",
+      str_detect(company_code, "MISO|RFC") ~ "Midwest",
+      str_detect(company_code, "PJM") ~ "PJM",
+      str_detect(company_code, "SOCO|TVA|CPLE|CPLW") ~ "Southeast",
+      str_detect(company_code, "ISNE") ~ "New England",
+      str_detect(company_code, "IPCO|PACE|PACW|NEVP|SPPC") ~ "West",
+      str_detect(company_code, "SRP|AZPS|PNM|EPE") ~ "Southwest",
+      str_detect(company_code, "WACM|PSCO") ~ "Mountain",
+      str_detect(company_code, "BPAT|DOPD|GCPD|CHPD|AVA") ~ "Northwest",
+      TRUE ~ "Other"
+    )
+  ) %>%
+  
+  # Add company size category based on average value
+  # Explanation: Company size affects energy production/consumption patterns
+  group_by(company_code) %>%
+  mutate(
+    avg_company_value = mean(value_numeric, na.rm = TRUE)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    company_size = case_when(
+      avg_company_value < 10000 ~ "Small",
+      avg_company_value < 50000 ~ "Medium", 
+      avg_company_value < 200000 ~ "Large",
+      TRUE ~ "Very Large"
+    ),
+    
+    # Add day type (weekday/weekend)
+    # Explanation: Energy consumption patterns differ on weekends
+    day_type = ifelse(weekday %in% c("Sat", "Sun"), "Weekend", "Weekday"),
+    
+    # Create peak/off-peak designation
+    # Explanation: Peak periods are important for energy pricing and demand analysis
+    season_peak = case_when(
+      season %in% c("Summer", "Winter") ~ "Peak Season",
+      TRUE ~ "Off-Peak Season"
+    )
+  ) %>%
+  
+  # Reorder columns
+  select(
+    # Company information
+    company_code, company_name, state, region, company_size,
+    
+    # Time information
+    date, year, month, day, weekday, day_type, season, season_peak, quarter,
+    
+    # Measurement information
+    measurement_type, measurement_name, measurement_category, measurement_subcategory,
+    
+    # Value information
+    value_numeric, units,
+    
+    # Location information
+    timezone, timezone_desc,
+    
+    # Keep original value for reference
+    value, value_conversion_failed
+  ) %>%
+  
+  # Remove rows with NA values in critical columns
+  # Explanation: Missing critical values would distort analysis
+  filter(!is.na(value_numeric))
+
+# Backup cleaned data
+cleaned_data_backup_file <- create_raw_data_backup(energy_clean, "energy_clean")
+cat(sprintf("Cleaned energy data backed up: %s\n", cleaned_data_backup_file))
+
+# Check for missing values
+energy_missing <- energy_clean %>%
+  summarise(across(everything(), ~sum(is.na(.))))
+
+print("Missing values in energy data:")
+print(energy_missing)
+
+# Check for outliers using z-score method
+identify_outliers <- function(x, threshold = 3) {
+  if(!is.numeric(x)) return(NA)
+  
+  mu <- mean(x, na.rm = TRUE)
+  sigma <- sd(x, na.rm = TRUE)
+  
+  # Z-score based outlier detection
+  outliers <- which(abs(x - mu) > threshold * sigma)
+  return(length(outliers))
+}
+
+# Find potential outliers
+energy_outliers <- energy_clean %>%
+  group_by(measurement_category) %>%
+  mutate(is_outlier = abs(scale(value_numeric)) > 3) %>%
+  summarise(
+    total_records = n(),
+    outlier_count = sum(is_outlier, na.rm = TRUE),
+    outlier_percent = 100 * outlier_count / total_records,
+    .groups = 'drop'
+  )
+
+print("Potential outliers by measurement category:")
+print(energy_outliers)
+
+# Save cleaned energy data
+saveRDS(energy_clean, "data/processed/energy_clean.rds")
+write_csv(energy_clean, "data/processed/energy_clean.csv")
+
+# Create a smaller tracked version for GitHub
+energy_clean_sample <- energy_clean %>%
+  group_by(company_code, date) %>%
+  summarise(
+    avg_value = mean(value_numeric, na.rm = TRUE),
+    measurement_types = n_distinct(measurement_type),
+    .groups = 'drop'
+  ) %>%
+  head(100)  # Keep only a small sample for GitHub tracking
+
+# Save the sample file for GitHub tracking
+write_csv(energy_clean_sample, "data/processed/energy_clean_sample.csv")
+
+# Commit the changes to GitHub
+if (github_connected) {
+  commit_and_push_changes(
+    commit_message = sprintf("Energy data cleaning completed on %s - %d records processed", 
+                            Sys.Date(), nrow(energy_clean)),
+    files_to_add = "data/processed/energy_clean_sample.csv README.md"
+  )
+}
+
+# Create summary statistics
+energy_summary <- energy_clean %>%
+  group_by(measurement_category, state) %>%
+  summarise(
+    records = n(),
+    companies = n_distinct(company_code),
+    avg_value = mean(value_numeric, na.rm = TRUE),
+    total_value = sum(value_numeric, na.rm = TRUE),
+    min_value = min(value_numeric, na.rm = TRUE),
+    max_value = max(value_numeric, na.rm = TRUE),
+    value_range = max_value - min_value,
+    std_dev = sd(value_numeric, na.rm = TRUE),
+    cv = std_dev / avg_value,  # Coefficient of variation
+    .groups = 'drop'
+  ) %>%
+  arrange(desc(total_value))
+
+# Save and commit summary statistics
+write_csv(energy_summary, "data/processed/energy_summary_by_category_state.csv")
+if (github_connected) {
+  commit_and_push_changes("Added energy summary statistics by category and state", 
+                         "data/processed/energy_summary_by_category_state.csv")
+}
+
+print("Energy summary by measurement type and state:")
+print(energy_summary)
+
+# After cleaning energy data, create the energy_by_state aggregation
+# Explanation: State-level aggregation enables geographic analysis and weather integration
+energy_by_state <- energy_clean %>%
+  filter(!is.na(state)) %>%
+  group_by(state, date, measurement_category) %>%
+  summarise(
+    total_value = sum(value_numeric, na.rm = TRUE),
+    avg_value = mean(value_numeric, na.rm = TRUE),
+    num_companies = n_distinct(company_code),
+    min_value = min(value_numeric, na.rm = TRUE),
+    max_value = max(value_numeric, na.rm = TRUE),
+    value_range = max_value - min_value,
+    .groups = 'drop'
+  ) %>%
+  # Pivot measurement categories to columns for easier analysis
+  # Explanation: Wide format simplifies analysis of relationships between categories
+  pivot_wider(
+    names_from = measurement_category,
+    values_from = c(total_value, avg_value),
+    values_fill = list(total_value = 0, avg_value = 0)
+  )
+
+# Save the aggregated data
+saveRDS(energy_by_state, "data/processed/energy_by_state.rds")
+write_csv(energy_by_state, "data/processed/energy_by_state.csv")
+
+# Save a sample for GitHub
+energy_by_state_sample <- energy_by_state %>% 
+  sample_n(min(100, nrow(.)))
+write_csv(energy_by_state_sample, "data/processed/energy_by_state_sample.csv")
+if (github_connected) {
+  commit_and_push_changes("Added energy by state aggregated data sample", 
+                         "data/processed/energy_by_state_sample.csv")
+}
+
+# Create additional aggregation by region for macro-level analysis
+# Explanation: Regional analysis captures broader market dynamics
+energy_by_region <- energy_clean %>%
+  filter(!is.na(region)) %>%
+  group_by(region, date, measurement_category) %>%
+  summarise(
+    total_value = sum(value_numeric, na.rm = TRUE),
+    avg_value = mean(value_numeric, na.rm = TRUE),
+    num_companies = n_distinct(company_code),
+    states_count = n_distinct(state, na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+# Save regional aggregation
+saveRDS(energy_by_region, "data/processed/energy_by_region.rds")
+write_csv(energy_by_region, "data/processed/energy_by_region.csv")
+
+# Save a sample for GitHub
+energy_by_region_sample <- energy_by_region %>% 
+  sample_n(min(100, nrow(.)))
+write_csv(energy_by_region_sample, "data/processed/energy_by_region_sample.csv")
+if (github_connected) {
+  commit_and_push_changes("Added energy by region aggregated data sample", 
+                         "data/processed/energy_by_region_sample.csv")
+}
+
+# Check the data structures
+cat("Energy by state data structure:\n")
+str(energy_by_state)
+cat(sprintf("\nTotal records in energy_by_state: %d\n", nrow(energy_by_state)))
+cat(sprintf("Number of states: %d\n", n_distinct(energy_by_state$state)))
+cat("\nEnergy by region data structure:\n")
+str(energy_by_region)
+cat(sprintf("\nTotal records in energy_by_region: %d\n", nrow(energy_by_region)))
+cat(sprintf("Number of regions: %d\n", n_distinct(energy_by_region$region)))
+```
+
+Data Quality Assessment
+
+```{r}
+# Examine the clean data structure
+str(energy_clean)
+
+# Post-cleaning data quality assessment
+energy_clean %>%
+  skimr::skim() %>%
+  knitr::kable(caption = "Cleaned Energy Data Quality Summary")
+
+# Compare data quality before and after cleaning
+quality_comparison <- data.frame(
+  Metric = c(
+    "Total Records", 
+    "Missing Values", 
+    "Derived Features", 
+    "Categorical Variables",
+    "Geographic Coverage",
+    "Value Validation",
+    "Temporal Features"
+  ),
+  Before = c(
+    nrow(energy_raw),
+    sum(is.na(energy_raw)),
+    0,  # No derived features in raw data
+    0,  # No categorized variables in raw data
+    "Limited",
+    "No validation",
+    "Basic date only"
+  ),
+  After = c(
+    nrow(energy_clean),
+    sum(is.na(energy_clean)),
+    6,  # New derived features
+    5,  # New categorical variables
+    "State and region mapping",
+    "Numeric conversion with validation",
+    "Year, month, day, weekday, season, quarter"
+  ))
+
+# Save quality comparison for GitHub tracking
+write_csv(quality_comparison, "data/processed/energy_data_quality_comparison.csv")
+if (github_connected) {
+  commit_and_push_changes("Added energy data quality comparison metrics", 
+                         "data/processed/energy_data_quality_comparison.csv")
+}
+
+knitr::kable(quality_comparison, caption = "Energy Data Quality Improvement Summary")
+
+# Visualize the distribution of values after cleaning
+value_dist_clean <- ggplot(energy_clean, aes(x = value_numeric)) +
+  geom_histogram(bins = 50, fill = "steelblue", alpha = 0.7) +
+  scale_x_log10(labels = scales::comma) +
+  facet_wrap(~ measurement_category) +
+  labs(
+    title = "Distribution of Energy Values by Category (Clean Data)",
+    subtitle = "Log scale used due to wide value range",
+    x = "Energy Value (Log Scale)",
+    y = "Count",
+    caption = "Data source: EIA Daily Regional Energy Data"
+  ) +
+  theme_minimal()
+
+print(value_dist_clean)
+ggsave("output/figures/clean_energy_distribution.png", value_dist_clean,
+        width = 12, height = 8, dpi = 300)
+
+# Commit visualization to GitHub
+if (github_connected) {
+  commit_and_push_changes("Added clean energy distribution visualization", 
+                        "output/figures/clean_energy_distribution.png")
+}
+
+# Validate state mapping success rate
+state_mapping_success <- energy_clean %>%
+  group_by(has_state = !is.na(state)) %>%
+  summarise(
+    count = n(),
+    percent = count / nrow(energy_clean) * 100,
+    .groups = 'drop'
+  )
+
+knitr::kable(state_mapping_success, caption = "State Mapping Success Rate")
+
+# Data validation summary
+validation_results <- list(
+  total_records = nrow(energy_clean),
+  time_span = paste(min(energy_clean$date), "to", max(energy_clean$date)),
+  states_covered = n_distinct(energy_clean$state, na.rm = TRUE),
+  regions_covered = n_distinct(energy_clean$region, na.rm = TRUE),
+  companies_covered = n_distinct(energy_clean$company_code),
+  measurement_types = n_distinct(energy_clean$measurement_type),
+  state_mapping_success_rate = state_mapping_success$percent[state_mapping_success$has_state],
+  missing_values_pct = sum(is.na(energy_clean)) / (nrow(energy_clean) * ncol(energy_clean)) * 100
+)
+
+print("Data Validation Summary:")
+print(validation_results)
+
+# Save validation results for GitHub
+jsonlite::write_json(validation_results, "data/processed/energy_validation_results.json", pretty = TRUE)
+if (github_connected) {
+  commit_and_push_changes("Added energy data validation results", 
+                         "data/processed/energy_validation_results.json")
+}
+```
+
+Exploratory Data Analysis
+
+```{r}
+# EXPLORATORY DATA ANALYSIS - ENERGY DATA
+##################################################
+
+# Load cleaned energy data if not already in memory
+if(!exists("energy_clean")) {
+  energy_clean <- readRDS("data/processed/energy_clean.rds")
+  energy_by_state <- readRDS("data/processed/energy_by_state.rds")
+}
+
+# Create Summary Statistics
+##################################################
+
+# Overall energy statistics by state
+energy_stats_by_state <- energy_clean %>%
+  filter(!is.na(state)) %>%
+  group_by(state) %>%
+  summarise(
+    total_records = n(),
+    num_companies = n_distinct(company_code),
+    total_energy_gwh = sum(value_numeric, na.rm = TRUE) / 1000,  # Convert to GWh
+    avg_daily_energy = mean(value_numeric, na.rm = TRUE),
+    generation_pct = sum(value_numeric[measurement_category == "Generation"], na.rm = TRUE) /
+                      sum(value_numeric, na.rm = TRUE) * 100,
+    demand_pct = sum(value_numeric[measurement_category == "Demand"], na.rm = TRUE) /
+                  sum(value_numeric, na.rm = TRUE) * 100,
+    max_daily_value = max(value_numeric, na.rm = TRUE),
+    days_covered = n_distinct(date),
+    .groups = 'drop'
+  ) %>%
+  arrange(desc(total_energy_gwh))
+
+# Save weather stats to CSV
+write_csv(energy_stats_by_state, "data/processed/state_energy_stats.csv")
+if (github_connected) {
+  commit_and_push_changes("Added state energy statistics", "data/processed/state_energy_stats.csv")
+}
+
+print("Energy Statistics by State:")
+print(energy_stats_by_state)
+
+# Statistics by company type and size
+company_stats <- energy_clean %>%
+  group_by(company_name, company_size, state) %>%
+  summarise(
+    total_records = n(),
+    total_energy_gwh = sum(value_numeric, na.rm = TRUE) / 1000,
+    avg_daily_energy = mean(value_numeric, na.rm = TRUE),
+    measurement_types = n_distinct(measurement_type),
+    day_types = n_distinct(day_type),
+    date_range = paste(min(date), "to", max(date)),
+    .groups = 'drop'
+  ) %>%
+  arrange(desc(total_energy_gwh))
+
+# Save company stats for GitHub
+write_csv(head(company_stats, 50), "data/processed/top_energy_companies.csv")
+if (github_connected) {
+  commit_and_push_changes("Added top energy companies statistics", 
+                         "data/processed/top_energy_companies.csv")
+}
+
+# Energy Production/Demand Patterns
+##################################################
+
+# Daily energy patterns by measurement category
+daily_energy_patterns <- energy_clean %>%
+  group_by(date, measurement_category) %>%
+  summarise(
+    total_value = sum(value_numeric, na.rm = TRUE),
+    avg_value = mean(value_numeric, na.rm = TRUE),
+    companies_reporting = n_distinct(company_code),
+    .groups = 'drop'
+  ) %>%
+  filter(measurement_category %in% c("Generation", "Demand", "Interchange"))
+
+# Create time series plot
+energy_timeseries <- ggplot(daily_energy_patterns,
+                            aes(x = date, y = total_value/1000, color = measurement_category)) +
+  geom_line(size = 1) +
+  scale_color_brewer(palette = "Set1", name = "Measurement Type") +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "Daily Energy Patterns by Measurement Type",
+    subtitle = "Total Energy Values across US (2024)",
+    x = "Date",
+    y = "Total Energy (GWh)",
+    caption = "Data source: EIA Daily Regional Energy Data"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.position = "bottom",
+    plot.caption = element_text(size = 8, color = "gray50")
+  )
+
+# Display the plot
+print(energy_timeseries)
+
+# Save the plot
+ggsave("output/figures/energy_timeseries.png", energy_timeseries,
+        width = 12, height = 6, dpi = 300)
+if (github_connected) {
+  commit_and_push_changes("Added energy time series visualization", 
+                        "output/figures/energy_timeseries.png")
+}
+
+# Examine day of week patterns
+# Explanation: Weekday vs. weekend patterns are important for energy demand forecasting
+weekday_patterns <- energy_clean %>%
+  filter(measurement_category == "Demand") %>%
+  group_by(weekday) %>%
+  summarise(
+    avg_demand = mean(value_numeric, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  mutate(weekday = factor(weekday, levels = c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")))
+
+weekday_plot <- ggplot(weekday_patterns, aes(x = weekday, y = avg_demand/1000)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = round(avg_demand/1000, 1)), vjust = -0.5, size = 3) +
+  labs(
+    title = "Average Energy Demand by Day of Week",
+    subtitle = "Shows weekend vs. weekday patterns",
+    x = "Day of Week",
+    y = "Average Demand (GWh)"
+  ) +
+  theme_minimal()
+
+print(weekday_plot)
+ggsave("output/figures/weekday_energy_patterns.png", weekday_plot,
+        width = 10, height = 6, dpi = 300)
+if (github_connected) {
+  commit_and_push_changes("Added weekday energy patterns visualization", 
+                        "output/figures/weekday_energy_patterns.png")
+}
+
+# Geographic Distribution
+##################################################
+
+# Create US state map for energy data
+us_states <- map_data("state")
+
+# Prepare state-level energy data for mapping
+state_energy_map <- energy_stats_by_state %>%
+  mutate(state_name = tolower(state.name[match(state, state.abb)])) %>%
+  filter(!is.na(state_name))
+
+
+# Energy production choropleth map
+energy_production_map <- ggplot() +
+  geom_map(data = us_states, map = us_states,
+           aes(x = long, y = lat, map_id = region),
+           fill = "white", color = "gray80", size = 0.1) +
+  geom_map(data = state_energy_map, map = us_states,
+           aes(fill = total_energy_gwh, map_id = state_name),
+           color = "white", size = 0.3) +
+  scale_fill_viridis(
+    option = "magma",
+    name = "Total Energy (GWh)",
+    trans = "log10",
+    labels = scales::comma
+  ) +
+  coord_map("albers", lat0 = 39, lat1 = 45) +
+  labs(
+    title = "Total Energy by State",
+    subtitle = "2024 Energy Data (Log Scale)",
+    caption = "Source: EIA Energy Data | Values shown in Gigawatt-hours (GWh)"
+  ) +
+  theme_void() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5),
+    legend.position = "bottom",
+    plot.caption = element_text(size = 8, hjust = 1, color = "gray50")
+  )
+
+# Display the plot
+print(energy_production_map)
+
+# Save the plot
+ggsave("output/figures/energy_production_map.png", energy_production_map,
+        width = 12, height = 8, dpi = 300)
+if (github_connected) {
+  commit_and_push_changes("Added energy production map visualization", 
+                        "output/figures/energy_production_map.png")
+}
+
+# Company Analysis
+##################################################
+
+# Top companies by energy volume
+top_companies <- company_stats %>%
+  arrange(desc(total_energy_gwh)) %>%
+  head(20)
+
+company_size_plot <- ggplot(top_companies,
+                            aes(x = reorder(company_name, total_energy_gwh),
+                                y = total_energy_gwh,
+                                fill = company_size)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_brewer(palette = "Set2", name = "Company Size") +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "Top 20 Energy Companies by Total Volume",
+    subtitle = "2024 Energy Production/Distribution",
+    x = "Company",
+    y = "Total Energy (GWh)",
+    caption = "Data source: EIA Energy Data"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    axis.text.y = element_text(size = 8),
+    plot.caption = element_text(size = 8, color = "gray50")
+  )
+
+# Display the plot
+print(company_size_plot)
+
+# Save the plot
+ggsave("output/figures/top_energy_companies.png", company_size_plot,
+        width = 12, height = 8, dpi = 300)
+if (github_connected) {
+  commit_and_push_changes("Added top energy companies visualization", 
+                        "output/figures/top_energy_companies.png")
+}
+
+# Seasonal Energy Patterns
+##################################################
+
+# Analyze seasonal patterns
+seasonal_energy <- energy_clean %>%
+  group_by(season, measurement_category) %>%
+  summarise(
+    total_energy = sum(value_numeric, na.rm = TRUE) / 1000,
+    avg_daily = mean(value_numeric, na.rm = TRUE),
+    num_days = n_distinct(date),
+    total_records = n(),
+    .groups = 'drop'
+  ) %>%
+  filter(measurement_category %in% c("Generation", "Demand"))
+
+seasonal_energy_plot <- ggplot(seasonal_energy,
+                               aes(x = season, y = total_energy, fill = measurement_category)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_brewer(palette = "Set1", name = "Type") +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "Seasonal Energy Patterns",
+    subtitle = "Generation vs Demand by Season (2024)",
+    x = "Season",
+    y = "Total Energy (GWh)",
+    caption = "Higher demand in summer and winter due to heating/cooling needs"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.position = "bottom",
+    plot.caption = element_text(size = 8, color = "gray50")
+  )
+
+# Display the plot
+print(seasonal_energy_plot)
+
+# Save the plot
+ggsave("output/figures/seasonal_energy_patterns.png", seasonal_energy_plot,
+        width = 10, height = 6, dpi = 300)
+if (github_connected) {
+  commit_and_push_changes("Added seasonal energy patterns visualization", 
+                        "output/figures/seasonal_energy_patterns.png")
+}
+
+# Weekly Patterns
+##################################################
+
+# Analyze weekly patterns
+weekly_patterns <- energy_clean %>%
+  group_by(weekday, measurement_category) %>%
+  summarise(
+    avg_energy = mean(value_numeric, na.rm = TRUE),
+    total_records = n(),
+    unique_days = n_distinct(date),
+    .groups = 'drop'
+  ) %>%
+  filter(measurement_category %in% c("Generation", "Demand")) %>%
+  mutate(weekday = factor(weekday, levels = c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")))
+
+weekly_plot <- ggplot(weekly_patterns,
+                      aes(x = weekday, y = avg_energy, color = measurement_category,
+                          group = measurement_category)) +
+  geom_line(size = 1.5) +
+  geom_point(size = 4) +
+  scale_color_brewer(palette = "Set1", name = "Type") +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "Weekly Energy Patterns",
+    subtitle = "Average Daily Energy by Day of Week",
+    x = "Day of Week",
+    y = "Average Energy (MWh)",
+    caption = "Note the consistent drop in energy use on weekends"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.position = "bottom",
+    plot.caption = element_text(size = 8, color = "gray50")
+  )
+
+# Display the plot
+print(weekly_plot)
+
+# Save the plot
+ggsave("output/figures/weekly_energy_patterns.png", weekly_plot,
+        width = 10, height = 6, dpi = 300)
+if (github_connected) {
+  commit_and_push_changes("Added weekly energy patterns visualization", 
+                         "output/figures/weekly_energy_patterns.png")
+}
+
+# Energy Mix Analysis
+##################################################
+
+# Analyze energy mix by state
+energy_mix <- energy_clean %>%
+  filter(!is.na(state)) %>%
+  group_by(state, measurement_category) %>%
+  summarise(
+    total_energy = sum(value_numeric, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  group_by(state) %>%
+  mutate(
+    percentage = total_energy / sum(total_energy) * 100
+  ) %>%
+  filter(measurement_category %in% c("Generation", "Demand", "Interchange"))
+
+# Create energy mix visualization for top states
+top_states <- energy_stats_by_state %>%
+  top_n(10, total_energy_gwh) %>%
+  pull(state)
+
+energy_mix_plot <- energy_mix %>%
+  filter(state %in% top_states) %>%
+  ggplot(aes(x = reorder(state, -percentage), y = percentage, fill = measurement_category)) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_brewer(palette = "Set3", name = "Energy Type") +
+  labs(
+    title = "Energy Mix by State",
+    subtitle = "Top 10 States by Total Energy Volume",
+    x = "State",
+    y = "Percentage (%)",
+    caption = "Data source: EIA Energy Data"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.position = "bottom",
+    plot.caption = element_text(size = 8, color = "gray50")
+  ) +
+  coord_flip()
+
+# Display the plot
+print(energy_mix_plot)
+
+# Save the plot
+ggsave("output/figures/energy_mix_by_state.png", energy_mix_plot,
+        width = 10, height = 8, dpi = 300)
+if (github_connected) {
+  commit_and_push_changes("Added energy mix by state visualization", 
+                         "output/figures/energy_mix_by_state.png")
+}
+
+# Interactive Dashboard
+##################################################
+
+# Create interactive energy map
+interactive_energy_map <- plot_ly(
+  data = state_energy_map,
+  type = "choropleth",
+  locations = ~state,
+  locationmode = "USA-states",
+  z = ~total_energy_gwh,
+  text = ~paste(state_name, "<br>",
+                "Total Energy:", round(total_energy_gwh, 1), "GWh<br>",
+                "Companies:", num_companies, "<br>",
+                "Generation %:", round(generation_pct, 1), "%"),
+  colorscale = "Viridis") %>%
+  layout(
+    title = "US Energy Production/Distribution by State - 2024",
+    geo = list(
+      scope = "usa",
+      projection = list(type = "albers usa"),
+      showlakes = TRUE,
+      lakecolor = toRGB("white")
+    )
+  )
+
+# Display the interactive map
+print(interactive_energy_map)
+
+# Save the interactive map
+htmlwidgets::saveWidget(interactive_energy_map, "output/figures/interactive_energy_map.html",
+                          selfcontained = TRUE)
+if (github_connected) {
+  commit_and_push_changes("Added interactive energy map visualization", 
+                         "output/figures/interactive_energy_map.html")
+}
+
+# Energy Summary Dashboard
+##################################################
+
+# Create summary metrics
+energy_metrics <- list(
+  total_energy_twh = sum(energy_clean$value_numeric, na.rm = TRUE) / 1000000,
+  largest_producer = company_stats %>%
+     arrange(desc(total_energy_gwh)) %>%
+     slice(1) %>%
+     pull(company_name),
+  most_active_state = energy_stats_by_state %>%
+     arrange(desc(total_energy_gwh)) %>%
+     slice(1) %>%
+     pull(state),
+  avg_daily_national = mean(daily_energy_patterns$total_value, na.rm = TRUE) / 1000,
+  generation_demand_ratio = sum(energy_clean$value_numeric[energy_clean$measurement_category == "Generation"], na.rm = TRUE) /
+                            sum(energy_clean$value_numeric[energy_clean$measurement_category == "Demand"], na.rm = TRUE)
+)
+
+# Create energy dashboard
+p1 <- energy_timeseries + theme(legend.position = "none")
+p2 <- seasonal_energy_plot + theme(legend.position = "right")
+p3 <- weekly_plot + theme(legend.position = "none")
+
+energy_dashboard <- (p1 | p2) / p3 +
+  plot_annotation(
+    title = "US Energy Analysis Dashboard - 2024",
+    subtitle = sprintf(
+      "Total Energy: %.1f TWh | Largest Producer: %s | Most Active State: %s | Generation/Demand Ratio: %.2f",
+      energy_metrics$total_energy_twh,
+      energy_metrics$largest_producer,
+      energy_metrics$most_active_state,
+      energy_metrics$generation_demand_ratio
+    ),
+    caption = "Data source: EIA Energy Data",
+    theme = theme(
+      plot.title = element_text(size = 20, face = "bold"),
+      plot.subtitle = element_text(size = 14),
+      plot.caption = element_text(size = 8, color = "gray50")
+    )
+  )
+
+# Display the dashboard
+print(energy_dashboard)
+
+# Save the dashboard
+ggsave("output/figures/energy_dashboard.png", energy_dashboard,
+        width = 16, height = 12, dpi = 300)
+if (github_connected) {
+  commit_and_push_changes("Added energy dashboard visualization", 
+                        "output/figures/energy_dashboard.png")
+}
+
+# Data Quality Verification
+##################################################
+
+# Check for missing data patterns
+data_completeness <- energy_clean %>%
+  group_by(date) %>%
+  summarise(
+    records = n(),
+    companies = n_distinct(company_code),
+    measurement_types = n_distinct(measurement_type),
+    .groups = 'drop'
+  )
+
+completeness_plot <- ggplot(data_completeness, aes(x = date, y = records)) +
+  geom_line() +
+  geom_smooth(method = "loess", color = "red") +
+  labs(
+    title = "Data Completeness Over Time",
+    subtitle = "Number of records per date",
+    x = "Date",
+    y = "Record Count"
+  ) +
+  theme_minimal()
+
+print(completeness_plot)
+ggsave("output/figures/data_completeness.png", completeness_plot,
+        width = 10, height = 6, dpi = 300)
+if (github_connected) {
+  commit_and_push_changes("Added data completeness visualization", 
+                        "output/figures/data_completeness.png")
+}
+
+# Generate comprehensive energy report
+energy_report <- list(
+  state_stats = energy_stats_by_state,
+  company_stats = company_stats,
+  seasonal_patterns = seasonal_energy,
+  weekly_patterns = weekly_patterns,
+  top_metrics = energy_metrics,
+  data_quality = list(
+    total_records = nrow(energy_clean),
+    unique_companies = n_distinct(energy_clean$company_code),
+    unique_states = n_distinct(energy_clean$state, na.rm = TRUE),
+    date_range = paste(min(energy_clean$date), "to", max(energy_clean$date)),
+    missing_values_pct = sum(is.na(energy_clean)) / (nrow(energy_clean) * ncol(energy_clean)) * 100,
+    outliers_detected = sum(energy_outliers$outlier_count)
+  )
+)
+
+# Save the report
+saveRDS(energy_report, "data/processed/energy_analysis_report.rds")
+
+# Create a JSON summary for GitHub tracking
+jsonlite::write_json(energy_report$data_quality, "data/processed/energy_quality_report.json", pretty = TRUE)
+if (github_connected) {
+  commit_and_push_changes("Added final energy data quality report", 
+                         "data/processed/energy_quality_report.json")
+}
+
+# Print final processing summary
+cat("\n==== ENERGY DATA PROCESSING SUMMARY ====\n")
+cat(sprintf("Processing completed on: %s\n", Sys.Date()))
+cat(sprintf("Total records processed: %d\n", energy_report$data_quality$total_records))
+cat(sprintf("States analyzed: %d\n", energy_report$data_quality$unique_states))
+cat(sprintf("Companies analyzed: %d\n", energy_report$data_quality$unique_companies))
+cat(sprintf("Time period: %s\n", energy_report$data_quality$date_range))
+cat(sprintf("Largest energy producers: %s\n", energy_metrics$largest_producer))
+cat(sprintf("Most active state: %s\n", energy_metrics$most_active_state))
+cat("\nData versions backed up and tracked in GitHub for reproducibility.\n")
+cat("Analysis complete!\n")
+
+# Create final README update with timestamp
+if (github_connected) {
+  readme_content <- readLines("README.md")
+  readme_updated <- gsub("## Last Updated: .*", 
+                        sprintf("## Last Updated: %s", Sys.Date()), 
+                        readme_content)
+  writeLines(readme_updated, "README.md")
+  commit_and_push_changes("Updated README with final processing timestamp", "README.md")
+}
+```
+
+
