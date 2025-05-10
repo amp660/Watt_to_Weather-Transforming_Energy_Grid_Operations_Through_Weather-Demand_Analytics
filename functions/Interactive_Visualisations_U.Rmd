@@ -1,0 +1,1190 @@
+---
+title: "Interactive Weather-Energy Data Visualizations"
+subtitle: "Advanced Interactive Exploration Tools"
+output: 
+  html_document:
+    theme: cosmo
+    highlight: tango
+    toc: true
+    toc_float: true
+    df_print: paged
+date: "2025-05-04"
+author: "Student Name"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                     fig.width = 10, fig.height = 6)
+```
+
+This document presents a collection of interactive visualizations for exploring relationships between weather conditions and energy consumption. Interactive visualizations allow users to explore data more deeply by providing tools for filtering, zooming, hovering for details, and manipulating views. These visualizations complement the static analyses presented in our other documents.
+
+```{r}
+# Install required packages if needed (commented to avoid reinstallation)
+# install.packages(c("plotly", "leaflet", "dygraphs", "networkD3", "highcharter", "DT"))
+
+# Load required libraries
+library(tidyverse)      # Data manipulation and visualization
+library(plotly)         # Interactive plots 
+library(leaflet)        # Interactive maps
+library(dygraphs)       # Interactive time series
+library(networkD3)      # Interactive network visualizations
+library(highcharter)    # Alternative interactive charts
+library(DT)             # Interactive tables
+library(lubridate)      # Date manipulation
+library(viridis)        # Color palettes
+library(scales)         # Scale formatting
+library(htmlwidgets)    # Saving interactive widgets
+
+# Set seed for reproducibility
+set.seed(42)
+
+# Record package versions for reproducibility
+pkg_versions <- sapply(c("plotly", "leaflet", "dygraphs", "networkD3", "highcharter", "DT"), 
+                       packageVersion)
+pkg_versions_df <- data.frame(
+  Package = names(pkg_versions),
+  Version = as.character(pkg_versions)
+)
+knitr::kable(pkg_versions_df, caption = "Package Versions")
+
+# Load the data
+weather_clean <- readRDS("../data/processed/weather_clean.rds")
+energy_clean <- readRDS("../data/processed/energy_clean.rds")
+merged_data <- readRDS("../data/processed/merged_data.rds")
+
+# Print data dimensions
+cat("Loaded dataset dimensions:\n")
+cat(sprintf("Weather data: %d rows, %d columns\n", nrow(weather_clean), ncol(weather_clean)))
+cat(sprintf("Energy data: %d rows, %d columns\n", nrow(energy_clean), ncol(energy_clean)))
+cat(sprintf("Merged data: %d rows, %d columns\n", nrow(merged_data), ncol(merged_data)))
+```
+
+
+Data Preparation
+
+```{r}
+# Prepare data for visualizations
+merged_data <- merged_data %>%
+  mutate(
+    # Convert value to numeric
+    energy_value = as.numeric(value),
+    
+    # Create time-based variables
+    month = month(date, label = TRUE),
+    season = case_when(
+      month %in% c("Dec", "Jan", "Feb") ~ "Winter",
+      month %in% c("Mar", "Apr", "May") ~ "Spring",
+      month %in% c("Jun", "Jul", "Aug") ~ "Summer",
+      month %in% c("Sep", "Oct", "Nov") ~ "Fall"
+    ),
+    weekday = wday(date, label = TRUE),
+    is_weekend = weekday %in% c("Sat", "Sun"),
+    
+    # Simplify energy type labels
+    energy_type = case_when(
+      type == "D" ~ "Demand",
+      type == "NG" ~ "Net Generation",
+      type == "TI" ~ "Total Interchange",
+      TRUE ~ as.character(type)
+    ),
+    
+    # Add weather condition categories
+    weather_condition = case_when(
+      precipitation_total > 10 ~ "Rainy",
+      cloud_cover_mean > 80 ~ "Cloudy",
+      cloud_cover_mean > 40 ~ "Partly Cloudy",
+      TRUE ~ "Clear"
+    ),
+    
+    # Add temperature categories
+    temp_category = case_when(
+      temp_mean < 30 ~ "Very Cold (< 30°F)",
+      temp_mean < 50 ~ "Cold (30-50°F)",
+      temp_mean < 70 ~ "Moderate (50-70°F)",
+      temp_mean < 85 ~ "Warm (70-85°F)",
+      TRUE ~ "Hot (> 85°F)"
+    )
+  )
+
+# Check for missing values that could affect visualization
+missing_check <- merged_data %>%
+  summarise(across(c(energy_value, temp_mean, humidity_mean, energy_region, location), 
+                  ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "Missing_Count")
+
+# If missing values are present, print a summary
+if(sum(missing_check$Missing_Count) > 0) {
+  cat("Warning: Missing values detected that could affect visualizations\n")
+  print(missing_check)
+}
+```
+
+3D Interactive Scatter Plot: Temperature, Humidity, Energy
+
+```{r}
+# Sample data for better performance
+# Using stratified sampling to maintain distribution across energy types
+temp_humid_energy_data <- merged_data %>%
+  filter(type == "D") %>%  # Focus on demand data
+  group_by(temp_category, season) %>%
+  sample_n(min(n(), 200)) %>%  # Sample within each group
+  ungroup() %>%
+  sample_n(min(5000, n()))  # Final sample size cap
+
+# Create hover text with formatted values
+hover_text <- with(temp_humid_energy_data,
+                  paste0("Location: ", location,
+                         "<br>Date: ", date,
+                         "<br>Temperature: ", round(temp_mean, 1), "°F",
+                         "<br>Humidity: ", round(humidity_mean, 1), "%",
+                         "<br>Energy: ", round(energy_value/1000, 1), " GWh",
+                         "<br>Season: ", season))
+
+# Create the 3D scatter plot
+temp_humid_energy <- plot_ly(
+  data = temp_humid_energy_data,
+  x = ~temp_mean,
+  y = ~humidity_mean,
+  z = ~energy_value/1000,
+  color = ~season,
+  colors = viridis_pal(option = "D")(4),
+  type = "scatter3d",
+  mode = "markers",
+  marker = list(
+    size = 3,
+    opacity = 0.7,
+    line = list(width = 0.5, color = 'white')
+  ),
+  text = hover_text,
+  hoverinfo = "text"
+) %>%
+  layout(
+    title = list(
+      text = "3D Relationship: Temperature, Humidity, and Energy Demand",
+      font = list(size = 16)
+    ),
+    scene = list(
+      xaxis = list(title = "Temperature (°F)"),
+      yaxis = list(title = "Humidity (%)"),
+      zaxis = list(title = "Energy Demand (GWh)"),
+      camera = list(eye = list(x = 1.5, y = 1.5, z = 1.5))
+    ),
+    legend = list(
+      title = list(text = "Season"),
+      x = 0.85,
+      y = 0.9
+    ),
+    annotations = list(
+      x = 1.0, y = -0.1,
+      text = "How to use: Click and drag to rotate. Scroll to zoom. Double-click to reset view.",
+      showarrow = FALSE,
+      xref = 'paper', yref = 'paper',
+      font = list(size = 10, color = 'gray')
+    )
+  )
+
+# Display the plot
+temp_humid_energy
+
+
+```
+
+Interactive Time Series with Range Selector
+
+```{r}
+# Prepare data for time series
+energy_ts_data <- merged_data %>%
+  filter(type == "D", energy_region %in% c("ERCO", "CISO", "NYIS", "PJM")) %>%
+  group_by(date, energy_region) %>%
+  summarise(
+    total_demand = sum(energy_value, na.rm = TRUE) / 1000,
+    avg_temp = mean(temp_mean, na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+# Create the interactive time series
+energy_ts <- plot_ly() %>%
+  add_trace(
+    data = energy_ts_data,
+    x = ~date,
+    y = ~total_demand,
+    color = ~energy_region,
+    colors = c("ERCO" = "#E41A1C", "CISO" = "#377EB8", "NYIS" = "#4DAF4A", "PJM" = "#984EA3"),
+    type = 'scatter',
+    mode = 'lines',
+    line = list(width = 2),
+    hoverinfo = "text",
+    text = ~paste(
+      "Region:", energy_region,
+      "<br>Date:", date,
+      "<br>Demand:", round(total_demand, 1), "GWh",
+      "<br>Avg Temp:", round(avg_temp, 1), "°F"
+    )
+  ) %>%
+  layout(
+    title = list(
+      text = "Energy Demand Time Series by Region",
+      font = list(size = 16)
+    ),
+    xaxis = list(
+      title = "Date",
+      rangeslider = list(visible = TRUE),
+      rangeselector = list(
+        buttons = list(
+          list(count = 1, label = "1m", step = "month", stepmode = "backward"),
+          list(count = 3, label = "3m", step = "month", stepmode = "backward"),
+          list(count = 6, label = "6m", step = "month", stepmode = "backward"),
+          list(step = "all", label = "All")
+        ),
+        bgcolor = "#E2E2E2",
+        font = list(size = 11)
+      )
+    ),
+    yaxis = list(
+      title = "Total Demand (GWh)",
+      hoverformat = ".1f"
+    ),
+    legend = list(
+      title = list(text = "Energy Region"),
+      orientation = "h",
+      y = -0.2
+    ),
+    margin = list(b = 100),
+    annotations = list(
+      x = 0.5, y = -0.25,
+      text = "Use the range selector buttons above to change date range. Drag in the small chart below to zoom.",
+      showarrow = FALSE,
+      xref = 'paper', yref = 'paper',
+      font = list(size = 10, color = 'gray')
+    )
+  )
+
+# Display the plot
+energy_ts
+
+```
+
+
+Interactive Heatmap: Energy Demand by Hour and Day
+
+```{r}
+# Prepare data for heatmap
+# We need to join hourly weather data with daily energy data
+heatmap_data <- weather_clean %>%
+  mutate(
+    hour = hour(datetime_utc),
+    day_of_week = wday(datetime_utc, label = TRUE)
+  ) %>%
+  left_join(
+    merged_data %>% 
+      filter(type == "D") %>%
+      select(location = location, date, energy_value),
+    by = c("location_name" = "location", "date" = "date")
+  ) %>%
+  group_by(hour, day_of_week) %>%
+  summarise(
+    avg_energy = mean(energy_value/1000, na.rm = TRUE),
+    avg_temp = mean(temperature_f, na.rm = TRUE),
+    count = n(),
+    .groups = 'drop'
+  ) %>%
+  # Filter out groups with too few observations
+  filter(count >= 10)
+
+# Create custom hover text
+heatmap_hover <- with(heatmap_data,
+                      paste0("Hour: ", hour,
+                             "<br>Day: ", day_of_week,
+                             "<br>Avg Energy: ", round(avg_energy, 2), " GWh",
+                             "<br>Avg Temp: ", round(avg_temp, 1), "°F",
+                             "<br>Sample size: ", count, " observations"))
+
+# Create the heatmap
+energy_heatmap <- plot_ly(
+  data = heatmap_data,
+  x = ~hour,
+  y = ~day_of_week,
+  z = ~avg_energy,
+  type = "heatmap",
+  colorscale = "YlOrRd",
+  colorbar = list(
+    title = "Avg Energy (GWh)",
+    tickformat = ".1f"
+  ),
+  text = heatmap_hover,
+  hoverinfo = "text"
+) %>%
+  layout(
+    title = list(
+      text = "Energy Demand Patterns by Hour and Day of Week",
+      font = list(size = 16)
+    ),
+    xaxis = list(
+      title = "Hour of Day",
+      dtick = 3,  # Tick every 3 hours
+      tickvals = seq(0, 23, 3)
+    ),
+    yaxis = list(
+      title = "Day of Week",
+      categoryorder = "array",
+      categoryarray = c("Sun", "Sat", "Fri", "Thu", "Wed", "Tue", "Mon")
+    ),
+    annotations = list(
+      x = 0.5, y = -0.15,
+      text = "Hover over cells to see details. Notice the difference between weekdays and weekends.",
+      showarrow = FALSE,
+      xref = 'paper', yref = 'paper',
+      font = list(size = 10, color = 'gray')
+    )
+  )
+
+# Display the plot
+energy_heatmap
+
+
+```
+
+Interactive Map of Weather Stations with Energy Data
+
+```{r}
+# Prepare data for map
+map_data <- weather_clean %>%
+  select(location_name, latitude_deg, longitude_deg) %>%
+  distinct() %>%
+  left_join(
+    merged_data %>%
+      filter(type == "D") %>%
+      group_by(location) %>%
+      summarise(
+        avg_energy = mean(energy_value/1000, na.rm = TRUE),
+        avg_temp = mean(temp_mean, na.rm = TRUE),
+        total_energy = sum(energy_value/1000, na.rm = TRUE),
+        day_count = n_distinct(date),
+        .groups = 'drop'
+      ),
+    by = c("location_name" = "location")
+  )
+
+# Remove any records with missing coordinates
+map_data <- map_data %>% 
+  filter(!is.na(latitude_deg) & !is.na(longitude_deg))
+
+# Create a color palette based on temperature
+temp_palette <- colorNumeric(
+  palette = viridis(10, option = "D"),
+  domain = map_data$avg_temp
+)
+
+# Create the interactive map
+interactive_map <- leaflet(map_data) %>%
+  # Add base tiles with attribution
+  addProviderTiles(providers$CartoDB.Positron, group = "Light Map") %>%
+  addProviderTiles(providers$Esri.WorldImagery, group = "Satellite") %>%
+  
+  # Add circle markers for each location
+  addCircleMarkers(
+    ~longitude_deg, 
+    ~latitude_deg,
+    radius = ~sqrt(avg_energy) * 2,  # Scale circle size by energy demand
+    color = ~temp_palette(avg_temp),
+    fillOpacity = 0.7,
+    stroke = TRUE,
+    weight = 1,
+    popup = ~paste(
+      "<strong>", location_name, "</strong><br>",
+      "Average Energy Demand: ", round(avg_energy, 1), " GWh<br>",
+      "Average Temperature: ", round(avg_temp, 1), "°F<br>",
+      "Total Energy: ", round(total_energy, 1), " GWh<br>",
+      "Days with data: ", day_count
+    )
+  ) %>%
+  
+  # Add legend
+  addLegend(
+    position = "bottomright",
+    pal = temp_palette,
+    values = ~avg_temp,
+    title = "Avg Temperature (°F)",
+    opacity = 0.7
+  ) %>%
+  
+  # Add layer control
+  addLayersControl(
+    baseGroups = c("Light Map", "Satellite"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  
+  # Add scale bar
+  addScaleBar(position = "bottomleft") %>%
+  
+  # Set view to center of US
+  setView(lng = -98.5795, lat = 39.8283, zoom = 4)
+
+# Display the map
+interactive_map
+
+```
+
+Interactive Parallel Coordinates Plot
+
+```{r}
+# Prepare data for parallel coordinates
+# Use stratified sampling for better performance
+parallel_data <- merged_data %>%
+  filter(type == "D") %>%
+  group_by(season, energy_region) %>%
+  sample_n(min(n(), 50)) %>%  # Sample within each group
+  ungroup() %>%
+  sample_n(min(1000, n())) %>%  # Final sample cap
+  select(energy_value, temp_mean, humidity_mean, wind_speed_mean, 
+         precipitation_total, season) %>%
+  mutate(
+    season_num = as.numeric(factor(season, levels = c("Winter", "Spring", "Summer", "Fall"))),
+    energy_gwh = energy_value/1000
+  )
+
+# Calculate ranges for scaling
+value_ranges <- parallel_data %>%
+  summarise(across(c(energy_gwh, temp_mean, humidity_mean, wind_speed_mean, precipitation_total),
+                  list(min = min, max = max), .names = "{.col}_{.fn}"))
+
+# Create parallel coordinates plot
+parallel_plot <- plot_ly(
+  type = 'parcoords',
+  line = list(
+    color = parallel_data$season_num,
+    colorscale = 'Viridis',
+    showscale = TRUE,
+    colorbar = list(
+      title = "Season",
+      tickvals = 1:4,
+      ticktext = levels(factor(parallel_data$season, 
+                              levels = c("Winter", "Spring", "Summer", "Fall")))
+    )
+  ),
+  dimensions = list(
+    list(range = c(value_ranges$energy_gwh_min, value_ranges$energy_gwh_max),
+         label = 'Energy (GWh)', 
+         values = parallel_data$energy_gwh),
+    list(range = c(value_ranges$temp_mean_min, value_ranges$temp_mean_max),
+         label = 'Temperature (°F)', 
+         values = parallel_data$temp_mean),
+    list(range = c(value_ranges$humidity_mean_min, value_ranges$humidity_mean_max),
+         label = 'Humidity (%)', 
+         values = parallel_data$humidity_mean),
+    list(range = c(value_ranges$wind_speed_mean_min, value_ranges$wind_speed_mean_max),
+         label = 'Wind Speed (m/s)', 
+         values = parallel_data$wind_speed_mean),
+    list(range = c(0, min(30, value_ranges$precipitation_total_max)),  # Cap for better visualization
+         label = 'Precipitation (mm)', 
+         values = pmin(parallel_data$precipitation_total, 30))  # Cap outliers
+  )
+) %>%
+  layout(
+    title = list(
+      text = "Multi-dimensional Weather-Energy Relationships",
+      font = list(size = 16)
+    ),
+    margin = list(t = 80, r = 50, b = 80, l = 50),
+    annotations = list(
+      x = 0.5, y = -0.15,
+      text = paste("How to use: Drag along any axis to filter data.",
+                  "Notice how data lines cluster by season color."),
+      showarrow = FALSE,
+      xref = 'paper', yref = 'paper',
+      font = list(size = 10, color = 'gray')
+    )
+  )
+
+# Display the plot
+parallel_plot
+
+
+```
+
+
+Interactive Sankey Diagram for Energy Flow
+
+```{r}
+# Prepare data for Sankey diagram
+sankey_data <- merged_data %>%
+  filter(type %in% c("D", "NG", "TI")) %>%  # Focus on main types
+  group_by(energy_region, type) %>%
+  summarise(total_value = sum(energy_value/1000, na.rm = TRUE),
+            .groups = 'drop') %>%
+  # Remove small flows for clarity
+  filter(total_value > 1000)  
+
+# Create nodes
+regions <- unique(sankey_data$energy_region)
+types <- unique(sankey_data$type)
+
+# Create node labels with better descriptions
+type_labels <- c("D" = "Demand", "NG" = "Net Generation", "TI" = "Transmission Interchange")
+nodes <- data.frame(
+  name = c(
+    regions,
+    sapply(types, function(t) type_labels[t])
+  )
+)
+
+# Create links
+links <- sankey_data %>%
+  mutate(
+    source = match(energy_region, nodes$name) - 1,  # 0-indexed
+    target = match(type_labels[type], nodes$name) - 1,  # 0-indexed
+    value = total_value
+  ) %>%
+  select(source, target, value)
+
+# Create the Sankey diagram
+sankey_plot <- sankeyNetwork(
+  Links = links,
+  Nodes = nodes,
+  Source = "source",
+  Target = "target",
+  Value = "value",
+  NodeID = "name",
+  fontSize = 12,
+  nodeWidth = 30,
+  nodePadding = 10,
+  sinksRight = TRUE,
+  colourScale = JS("d3.scaleOrdinal(d3.schemeCategory10)"),
+  LinkGroup = "source",
+  NodeGroup = NULL,
+  iterations = 32
+)
+
+# Add title and instructions using htmlwidgets::onRender
+sankey_plot <- htmlwidgets::onRender(sankey_plot, '
+  function(el, x) {
+    var svg = d3.select(el).select("svg");
+    
+    // Add title
+    svg.append("text")
+      .attr("x", svg.attr("width") / 2)
+      .attr("y", 20)
+      .attr("text-anchor", "middle")
+      .style("font-size", "16px")
+      .style("font-weight", "bold")
+      .text("Energy Flow: Regions to Measurement Types");
+      
+    // Add instructions
+    svg.append("text")
+      .attr("x", svg.attr("width") / 2)
+      .attr("y", svg.attr("height") - 10)
+      .attr("text-anchor", "middle")
+      .style("font-size", "10px")
+      .style("fill", "gray")
+      .text("Hover over flows to see details. Drag nodes to reposition.");
+  }
+')
+
+# Display the plot
+sankey_plot
+
+
+```
+
+
+Interactive Scatter with Marginal Distributions
+
+```{r}
+# Prepare data
+# Using stratified sampling for performance
+scatter_data <- merged_data %>%
+  filter(type == "D") %>%
+  group_by(temp_category, season) %>%
+  sample_n(min(n(), 100)) %>%
+  ungroup() %>%
+  sample_n(min(2000, n()))
+
+# Define custom hover text
+scatter_hover <- with(scatter_data,
+                     paste0("Location: ", location,
+                           "<br>Date: ", date,
+                           "<br>Temperature: ", round(temp_mean, 1), "°F",
+                           "<br>Energy: ", round(energy_value/1000, 2), " GWh",
+                           "<br>Season: ", season))
+
+# Create scatter plot with histograms
+scatter_marginal <- plot_ly(data = scatter_data) %>%
+  # Main scatter plot
+  add_trace(
+    type = "scatter",
+    mode = "markers",
+    x = ~temp_mean,
+    y = ~energy_value/1000,
+    color = ~season,
+    colors = viridis_pal(option = "D")(4),
+    text = scatter_hover,
+    hoverinfo = "text",
+    marker = list(
+      size = 7,
+      opacity = 0.7,
+      line = list(width = 1, color = '#FFFFFF')
+    ),
+    showlegend = TRUE
+  ) %>%
+  # Add LOESS smoothing curve
+  add_trace(
+    data = scatter_data,
+    x = ~temp_mean,
+    y = ~energy_value/1000,
+    type = "scatter",
+    mode = "lines",
+    line = list(color = "#FF5722", width = 3),
+    name = "Trend line",
+    hoverinfo = "none",
+    showlegend = TRUE,
+    transforms = list(
+      list(
+        type = 'aggregate',
+        groups = ~round(temp_mean, 0),  # Group by rounded temperature
+        aggregations = list(
+          list(target = 'y', func = 'avg', enabled = TRUE)
+        )
+      ),
+      list(
+        type = 'sort',
+        target = 'x',
+        order = 'ascending'
+      ),
+      list(
+        type = 'filter',
+        target = 'x',
+        operation = '>', 
+        value = min(scatter_data$temp_mean) + 2
+      ),
+      list(
+        type = 'filter',
+        type = 'filter',
+        target = 'x',
+        operation = '<', 
+        value = max(scatter_data$temp_mean) - 2
+      )
+    )
+  ) %>%
+  # X-axis histogram (top)
+  add_histogram(
+    x = ~temp_mean,
+    name = "Temp. Distribution",
+    marker = list(color = "rgba(100, 100, 100, 0.7)"),
+    yaxis = "y2",
+    showlegend = FALSE
+  ) %>%
+  # Y-axis histogram (right)
+  add_histogram(
+    y = ~energy_value/1000,
+    name = "Energy Distribution",
+    marker = list(color = "rgba(100, 100, 100, 0.7)"),
+    xaxis = "x2",
+    showlegend = FALSE
+  ) %>%
+  # Layout with multiple axes
+  layout(
+    title = list(
+      text = "Temperature vs Energy Demand with Distributions",
+      font = list(size = 16)
+    ),
+    xaxis = list(
+      title = "Temperature (°F)",
+      domain = c(0, 0.85),
+      zeroline = FALSE
+    ),
+    yaxis = list(
+      title = "Energy Demand (GWh)",
+      domain = c(0, 0.85),
+      zeroline = FALSE
+    ),
+    xaxis2 = list(
+      domain = c(0, 0.85),
+      anchor = "y2",
+      showgrid = FALSE,
+      zeroline = FALSE,
+      showticklabels = FALSE
+    ),
+    yaxis2 = list(
+      domain = c(0.85, 1),
+      anchor = "x",
+      showgrid = FALSE,
+      zeroline = FALSE,
+      showticklabels = FALSE
+    ),
+    margin = list(t = 50, r = 50, b = 80, l = 80),
+    showlegend = TRUE,
+    legend = list(orientation = "h", y = -0.2),
+    annotations = list(
+      x = 0.5, y = -0.18,
+      text = paste("The main plot shows temperature vs. energy demand relationship.",
+                  "Histograms show the distribution of each variable."),
+      showarrow = FALSE,
+      xref = 'paper', yref = 'paper',
+      font = list(size = 10, color = 'gray')
+    )
+  )
+
+# Display the plot
+scatter_marginal
+
+```
+
+
+Interactive Time Series with Dual Axis
+
+```{r}
+# Prepare data for time series with dual axis
+# Choose a specific region for clarity
+dual_axis_data <- merged_data %>%
+  filter(type == "D", energy_region == "ERCO") %>%
+  group_by(date) %>%
+  summarise(
+    avg_energy = mean(energy_value/1000, na.rm = TRUE),
+    avg_temp = mean(temp_mean, na.rm = TRUE),
+    records = n(),
+    .groups = 'drop'
+  ) %>%
+  # Filter for reliable data points
+  filter(records >= 3)
+
+# Create custom hover text
+energy_hover <- with(dual_axis_data,
+                    paste0("Date: ", date,
+                          "<br>Energy Demand: ", round(avg_energy, 2), " GWh",
+                          "<br>Temperature: ", round(avg_temp, 1), "°F"))
+
+temp_hover <- with(dual_axis_data,
+                   paste0("Date: ", date,
+                          "<br>Temperature: ", round(avg_temp, 1), "°F",
+                          "<br>Energy Demand: ", round(avg_energy, 2), " GWh"))
+
+# Create the dual axis plot
+dual_axis_ts <- plot_ly() %>%
+  # Energy demand on left y-axis
+  add_trace(
+    data = dual_axis_data,
+    x = ~date,
+    y = ~avg_energy,
+    name = "Energy Demand",
+    type = "scatter",
+    mode = "lines",
+    line = list(color = "blue", width = 2),
+    text = energy_hover,
+    hoverinfo = "text"
+  ) %>%
+  # Temperature on right y-axis
+  add_trace(
+    data = dual_axis_data,
+    x = ~date,
+    y = ~avg_temp,
+    name = "Temperature",
+    yaxis = "y2",
+    type = "scatter",
+    mode = "lines",
+    line = list(color = "red", width = 2),
+    text = temp_hover,
+    hoverinfo = "text"
+  ) %>%
+  layout(
+    title = list(
+      text = "Energy Demand and Temperature Over Time (ERCO Region)",
+      font = list(size = 16)
+    ),
+    xaxis = list(title = "Date"),
+    yaxis = list(
+      title = "Energy Demand (GWh)", 
+      side = "left", 
+      color = "blue",
+      showgrid = FALSE
+    ),
+    yaxis2 = list(
+      title = "Temperature (°F)",
+      overlaying = "y",
+      side = "right",
+      color = "red",
+      showgrid = FALSE
+    ),
+    legend = list(x = 0.01, y = 0.99),
+    hovermode = "closest",
+    margin = list(t = 50, r = 80, b = 80, l = 80),
+    annotations = list(
+      x = 0.5, y = -0.15,
+      text = paste("Notice how energy demand increases both at high and low temperatures,",
+                  "creating the characteristic U-shaped relationship."),
+      showarrow = FALSE,
+      xref = 'paper', yref = 'paper',
+      font = list(size = 10, color = 'gray')
+    )
+  )
+
+# Display the plot
+dual_axis_ts
+
+```
+
+
+Interactive Correlation Matrix
+
+```{r}
+# Prepare data for correlation matrix
+cor_data <- merged_data %>%
+  filter(type == "D") %>%
+  select(energy_value, temp_mean, humidity_mean, wind_speed_mean, 
+         precipitation_total, cloud_cover_mean) %>%
+  na.omit()
+
+# Calculate correlation matrix
+cor_matrix <- cor(cor_data)
+
+# Create the correlation heatmap
+cor_plot <- plot_ly(
+  z = cor_matrix,
+  x = colnames(cor_matrix),
+  y = colnames(cor_matrix),
+  type = "heatmap",
+  colorscale = list(
+    c(0, "#313695"),   # Strong negative correlation (blue)
+    c(0.5, "#FFFFBF"), # No correlation (light yellow)
+    c(1, "#A50026")    # Strong positive correlation (red)
+  ),
+  zmin = -1,
+  zmax = 1,
+  colorbar = list(title = "Correlation"),
+  text = round(cor_matrix, 2),
+  hovertemplate = "%{y} vs %{x}<br>Correlation: %{z:.2f}<extra></extra>"
+)
+
+# Add basic layout
+cor_plot <- cor_plot %>% layout(
+  title = "Correlation Matrix: Weather Variables and Energy Demand",
+  xaxis = list(
+    title = "",
+    tickangle = 45
+  ),
+  yaxis = list(
+    title = ""
+  ),
+  margin = list(t = 50, r = 50, b = 80, l = 100)
+)
+
+# Create annotations list separately
+annotations <- list()
+for (i in 1:nrow(cor_matrix)) {
+  for (j in 1:ncol(cor_matrix)) {
+    annotations[[length(annotations) + 1]] <- list(
+      x = colnames(cor_matrix)[j],
+      y = rownames(cor_matrix)[i],
+      text = sprintf("%.2f", cor_matrix[i, j]),
+      font = list(
+        color = ifelse(abs(cor_matrix[i, j]) > 0.5, "white", "black"),
+        size = 10
+      ),
+      showarrow = FALSE
+    )
+  }
+}
+
+# Add the instruction annotation separately
+instruction_annotation <- list(
+  x = 0.5, 
+  y = -0.15,
+  text = "Hover over cells to see correlation values. Strong correlations (near 1 or -1) indicate strong relationships.",
+  showarrow = FALSE,
+  xref = 'paper', 
+  yref = 'paper',
+  font = list(size = 10, color = 'gray')
+)
+
+# Combine all annotations
+all_annotations <- c(annotations, list(instruction_annotation))
+
+# Add all annotations to the plot
+cor_plot <- cor_plot %>% layout(annotations = all_annotations)
+
+# Display the plot
+cor_plot
+```
+
+
+ Interactive Animated Time Series
+ 
+```{r}
+ # Prepare data for animated plot
+# Group by month to reduce noise and highlight trends
+animated_data <- merged_data %>%
+  filter(type == "D", energy_region %in% c("ERCO", "CISO", "NYIS")) %>%
+  mutate(month = floor_date(date, "month")) %>%
+  group_by(month, energy_region) %>%
+  summarise(
+    avg_energy = mean(energy_value/1000, na.rm = TRUE),
+    avg_temp = mean(temp_mean, na.rm = TRUE),
+    records = n(),
+    .groups = 'drop'
+  ) %>%
+  # Filter for reliable data points
+  filter(records >= 5)
+
+# Create custom hover text
+animated_hover <- with(animated_data,
+                       paste0("Region: ", energy_region,
+                             "<br>Month: ", format(month, "%b %Y"),
+                             "<br>Avg Temperature: ", round(avg_temp, 1), "°F",
+                             "<br>Avg Energy: ", round(avg_energy, 2), " GWh"))
+
+# Create the animated time series
+animated_ts <- plot_ly(
+  data = animated_data,
+  x = ~avg_temp,
+  y = ~avg_energy,
+  color = ~energy_region,
+  colors = c("ERCO" = "#E41A1C", "CISO" = "#377EB8", "NYIS" = "#4DAF4A"),
+  frame = ~month,
+  type = 'scatter',
+  mode = 'markers+lines',
+  marker = list(size = 12, opacity = 0.8),
+  line = list(width = 2),
+  text = animated_hover,
+  hoverinfo = "text"
+) %>%
+  layout(
+    title = list(
+      text = "Monthly Energy-Temperature Relationship by Region",
+      font = list(size = 16)
+    ),
+    xaxis = list(
+      title = "Average Temperature (°F)",
+      range = c(min(animated_data$avg_temp) - 5, max(animated_data$avg_temp) + 5)
+    ),
+    yaxis = list(
+      title = "Average Energy Demand (GWh)",
+      range = c(min(animated_data$avg_energy) - 10, max(animated_data$avg_energy) + 10)
+    ),
+    legend = list(
+      title = list(text = "Energy Region"),
+      x = 0.01, 
+      y = 0.99
+    ),
+    margin = list(t = 50, r = 50, b = 80, l = 80),
+    annotations = list(
+      x = 0.5, y = -0.15,
+      text = paste("Use the play button to animate through time.",
+                  "Watch how the temperature-energy relationship changes seasonally."),
+      showarrow = FALSE,
+      xref = 'paper', yref = 'paper',
+      font = list(size = 10, color = 'gray')
+    )
+  ) %>%
+  animation_opts(
+    frame = 1000,  # milliseconds per frame
+    transition = 500,  # smooth transition time
+    easing = "cubic-in-out",
+    redraw = FALSE
+  ) %>%
+  animation_slider(
+    currentvalue = list(
+      prefix = "Month: ",
+      font = list(color = "black")
+    )
+  ) %>%
+  animation_button(
+    x = 0.1, 
+    y = -0.15,
+    xanchor = "right",
+    yanchor = "middle"
+  )
+
+# Display the plot
+animated_ts
+
+
+```
+
+
+Interactive Dashboard with Multiple Charts
+
+```{r}
+# Prepare data for dashboard
+dashboard_data <- merged_data %>%
+  filter(type == "D") %>%
+  group_by(energy_region, season) %>%
+  summarise(
+    avg_energy = mean(energy_value/1000, na.rm = TRUE),
+    avg_temp = mean(temp_mean, na.rm = TRUE),
+    count = n(),
+    .groups = 'drop'
+  ) %>%
+  # Filter for reliable data
+  filter(count >= 5)
+
+# Create the stacked bar chart
+bar_chart <- plot_ly(
+  data = dashboard_data,
+  x = ~energy_region,
+  y = ~avg_energy,
+  color = ~season,
+  colors = viridis_pal(option = "D")(4),
+  type = "bar",
+  text = ~paste(
+    "Season:", season,
+    "<br>Region:", energy_region,
+    "<br>Avg Energy:", round(avg_energy, 2), "GWh",
+    "<br>Avg Temp:", round(avg_temp, 1), "°F",
+    "<br>Sample size:", count
+  ),
+  hoverinfo = "text"
+) %>%
+  layout(
+    title = "Average Energy Demand by Region and Season",
+    barmode = "stack",
+    xaxis = list(title = "Energy Region", categoryorder = "total descending"),
+    yaxis = list(title = "Average Demand (GWh)"),
+    showlegend = FALSE
+  )
+
+# Create the scatter plot
+scatter_chart <- plot_ly(
+  data = dashboard_data,
+  x = ~avg_temp,
+  y = ~avg_energy,
+  color = ~energy_region,
+  size = ~count,
+  sizes = c(20, 80),
+  type = "scatter",
+  mode = "markers",
+  marker = list(opacity = 0.7, line = list(width = 1, color = '#FFFFFF')),
+  text = ~paste(
+    "Region:", energy_region,
+    "<br>Season:", season,
+    "<br>Avg Energy:", round(avg_energy, 2), "GWh",
+    "<br>Avg Temp:", round(avg_temp, 1), "°F",
+    "<br>Sample size:", count
+  ),
+  hoverinfo = "text"
+) %>%
+  layout(
+    title = "Temperature vs. Energy Demand by Region",
+    xaxis = list(title = "Average Temperature (°F)"),
+    yaxis = list(title = "Average Demand (GWh)"),
+    legend = list(title = list(text = "Energy Region"))
+  )
+
+# Create the dashboard
+dashboard <- subplot(
+  bar_chart,
+  scatter_chart,
+  nrows = 2,
+  shareX = FALSE,
+  titleY = TRUE,
+  margin = 0.1
+) %>%
+  layout(
+    title = list(
+      text = "Energy Dashboard: Regional and Seasonal Patterns",
+      font = list(size = 18)
+    ),
+    showlegend = TRUE,
+    legend = list(
+      orientation = "h", 
+      x = 0.5, 
+      y = -0.05,
+      xanchor = "center"
+    ),
+    margin = list(t = 70, r = 50, b = 100, l = 80),
+    annotations = list(
+      x = 0.5, y = -0.1,
+      text = paste("Top: Stacked bar chart shows total energy by region and season.",
+                  "Bottom: Scatter plot shows temperature-energy relationship.",
+                  "Circle size indicates number of observations."),
+      showarrow = FALSE,
+      xref = 'paper', yref = 'paper',
+      font = list(size = 10, color = 'gray')
+    )
+  )
+
+# Display the dashboard
+dashboard
+
+```
+
+
+Interactive Data Table
+
+```{r}
+# Prepare data for interactive table
+# Sample data for better performance
+table_data <- merged_data %>%
+  select(location, date, energy_region, energy_type = type, 
+         temp_mean, humidity_mean, wind_speed_mean, energy_value, season) %>%
+  mutate(
+    energy_value = round(energy_value/1000, 2), # Convert to GWh and round
+    temp_mean = round(temp_mean, 1),
+    humidity_mean = round(humidity_mean, 1),
+    wind_speed_mean = round(wind_speed_mean, 1)
+  ) %>%
+  rename(
+    "Location" = location,
+    "Date" = date,
+    "Energy Region" = energy_region,
+    "Energy Type" = energy_type,
+    "Temperature (°F)" = temp_mean,
+    "Humidity (%)" = humidity_mean,
+    "Wind Speed (m/s)" = wind_speed_mean,
+    "Energy (GWh)" = energy_value,
+    "Season" = season
+  ) %>%
+  # Sample for performance in web browsers
+  sample_n(min(10000, nrow(.)))
+
+# Create the interactive data table
+dt_interactive <- datatable(
+  table_data,
+  options = list(
+    pageLength = 25,
+    scrollX = TRUE,
+    searchHighlight = TRUE,
+    dom = 'Blfrtip',  # Buttons, length, filter, processing, table, information, pagination
+    buttons = c('copy', 'csv', 'excel', 'pdf'),
+    lengthMenu = list(c(10, 25, 50, 100, -1), c('10', '25', '50', '100', 'All'))
+  ),
+  filter = 'top',
+  class = 'cell-border stripe',
+  rownames = FALSE,
+  caption = htmltools::tags$caption(
+    style = 'caption-side: top; text-align: center; font-size: 16px; font-weight: bold;',
+    'Interactive Weather-Energy Data Table'
+  )
+) %>%
+  formatStyle(
+    'Energy (GWh)',
+    background = styleColorBar(range(table_data$`Energy (GWh)`, na.rm = TRUE), 'steelblue'),
+    backgroundSize = '100% 90%',
+    backgroundRepeat = 'no-repeat',
+    backgroundPosition = 'center'
+  ) %>%
+  formatStyle(
+    'Temperature (°F)',
+    background = styleColorBar(range(table_data$`Temperature (°F)`, na.rm = TRUE), '#E31A1C'),
+    backgroundSize = '100% 90%',
+    backgroundRepeat = 'no-repeat',
+    backgroundPosition = 'center'
+  ) %>%
+  formatStyle(
+    'Season',
+    backgroundColor = styleEqual(
+      c("Winter", "Spring", "Summer", "Fall"),
+      c("#A6CEE3", "#B2DF8A", "#FB9A99", "#FDBF6F")
+    )
+  )
+
+# Display the table
+dt_interactive
+```
+
+ 
+
+
+
+
+
+
